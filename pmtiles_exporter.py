@@ -4,10 +4,16 @@ import tempfile
 import shutil
 from pathlib import Path
 
-from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
-from qgis.PyQt.QtGui import QIcon
+from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication, QSize
+from qgis.PyQt.QtGui import QIcon, QImage, QPainter
 from qgis.PyQt.QtWidgets import QAction, QMessageBox
-from qgis.core import QgsProject, QgsMessageLog, Qgis
+from qgis.core import (
+    QgsProject, 
+    QgsMessageLog, 
+    Qgis,
+    QgsMapSettings,
+    QgsMapRendererCustomPainterJob
+)
 
 from .resources import *
 from .pmtiles_exporter_dialog import PMTilesExporterDialog
@@ -72,59 +78,72 @@ class PMTilesExporter:
             self.export_pmtiles()
 
     # ==========================================
-    # 以下、仕様書 8. 出力処理の擬似コード 実装部
+    # 以下、出力処理 実装部
     # ==========================================
     def export_pmtiles(self):
-        layers = self.dlg.get_selected_layers()
-        if not layers:
-            self.iface.messageBar().pushMessage("エラー", "レイヤーが一つも選択されていません。", level=Qgis.Critical)
+        """
+        ダイアログの「PMTiles を出力する」ボタン（OKボタン）が押されたときの処理。
+        現在はステップ1として、単一のPNG画像を出力する処理を実行する。
+        """
+        output_path_str = self.dlg.txtOutputPath.text()
+        if not output_path_str:
+            self.iface.messageBar().pushMessage("エラー", "保存先が指定されていません。", level=Qgis.Critical)
             return
 
+        # UIの拡張子を .png に置換
+        png_path = output_path_str.replace(".pmtiles", ".png")
         extent = self._get_extent()
-        min_zoom = self.dlg.spinMinZoom.value()
-        max_zoom = self.dlg.spinMaxZoom.value()
-        output_path = Path(self.dlg.txtOutputPath.text())
 
-        # 高ズーム警告
-        if max_zoom >= 21:
-            reply = QMessageBox.warning(
-                self.dlg, "高ズーム警告", 
-                f"ズームレベル {max_zoom} が設定されています。\n出力に非常に長い時間がかかる可能性があります。\n続行しますか？",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-            )
-            if reply == QMessageBox.No:
-                return
+        self.iface.messageBar().pushMessage("PMTiles Exporter", f"PNG出力を開始しました... ({Path(png_path).name})", level=Qgis.Info)
 
-        tmp_dir = Path(tempfile.mkdtemp(prefix="pmtiles_exporter_"))
-        
-        self.iface.messageBar().pushMessage("PMTiles Exporter", f"出力を開始しました... ({output_path.name})", level=Qgis.Info)
-        
         try:
-            # 1. 一時フォルダへ透過PNGとしてXYZ描画
-            self._render_layers_to_xyz_png(layers, extent, min_zoom, max_zoom, tmp_dir)
+            # 1. 透過PNGとして出力
+            self.export_layers_to_png(png_path, extent=extent)
             
-            # 2. XYZからMBTilesの構築
-            mbtiles_path = tmp_dir / "temp.mbtiles"
-            self._build_mbtiles_from_xyz(tmp_dir, mbtiles_path, min_zoom, max_zoom, extent)
-            
-            # 3. MBTilesからPMTilesへの変換
-            self._convert_mbtiles_to_pmtiles(mbtiles_path, output_path)
-
-            # 4. 成功したら設定を保存
+            # 成功したら設定を保存
             self.dlg.save_settings()
-            self.iface.messageBar().pushMessage("PMTiles Exporter", "出力が完了しました！ 📦", level=Qgis.Success)
+            self.iface.messageBar().pushMessage("PMTiles Exporter", f"PNG 出力完了: {png_path}", level=Qgis.Success)
             
         except Exception as e:
             QgsMessageLog.logMessage(f"エラー: {str(e)}", "PMTilesExporter", Qgis.Critical)
-            self.iface.messageBar().pushMessage("エラー", f"出力に失敗しました。ログを確認してください。", level=Qgis.Critical)
-            
-        finally:
-            # 一時フォルダのお掃除
-            try:
-                shutil.rmtree(tmp_dir)
-            except Exception as e:
-                QgsMessageLog.logMessage(f"一時フォルダの削除に失敗しました: {str(e)}", "PMTilesExporter", Qgis.Warning)
+            self.iface.messageBar().pushMessage("エラー", f"出力に失敗しました。ログを確認してください。\n{e}", level=Qgis.Critical)
 
+    def export_layers_to_png(self, output_path, extent=None, width=2048, height=2048):
+        """
+        QGIS の現在のレイヤーを合成して PNG を出力する最小実装。
+        """
+        # レイヤーツリーの描画順（上から下）を取得
+        all_layers = [layer for layer in QgsProject.instance().layerTreeRoot().layerOrder()]
+        
+        # UIでチェックされているレイヤーのみに絞り込む（順番は描画順を維持）
+        selected_layers = self.dlg.get_selected_layers()
+        layers = [layer for layer in all_layers if layer in selected_layers]
+
+        if not layers:
+            raise Exception("出力対象のレイヤーがありません。")
+
+        settings = QgsMapSettings()
+        settings.setLayers(layers)
+
+        if extent is None:
+            canvas = self.iface.mapCanvas()
+            extent = canvas.extent()
+
+        settings.setExtent(extent)
+        settings.setOutputSize(QSize(width, height))
+
+        # 透過背景の画像を作成
+        image = QImage(width, height, QImage.Format_ARGB32)
+        image.fill(0) # 0は完全な透明
+
+        painter = QPainter(image)
+        job = QgsMapRendererCustomPainterJob(settings, painter)
+        job.start()
+        job.waitForFinished()
+        painter.end()
+
+        image.save(str(output_path), "PNG")
+        return True
 
     def _get_extent(self):
         """出力範囲の取得"""
@@ -132,6 +151,8 @@ class PMTilesExporter:
             return self.iface.mapCanvas().extent()
         elif self.dlg.radLayer.isChecked():
             layers = self.dlg.get_selected_layers()
+            if not layers:
+                return self.iface.mapCanvas().extent()
             extent = layers[0].extent()
             for layer in layers[1:]:
                 extent.combineExtentWith(layer.extent())
@@ -139,21 +160,17 @@ class PMTilesExporter:
         else:
             return self.iface.mapCanvas().extent()
 
+    # ==========================================
+    # 今後実装予定のモック関数群
+    # ==========================================
     def _render_layers_to_xyz_png(self, layers, extent, min_zoom, max_zoom, tmp_dir):
         """レイヤーを合成し、透過PNGタイルとして出力（モック）"""
         QgsMessageLog.logMessage(f"[1/3] レンダリング開始: Z{min_zoom}-{max_zoom}", "PMTilesExporter", Qgis.Info)
-        # TODO: ここに QgsMapRendererCustomPainterJob 等を使用した
-        # 実際のXYZタイル計算とレンダリングのロジックを組み込みます。
 
     def _build_mbtiles_from_xyz(self, xyz_dir, mbtiles_path, min_zoom, max_zoom, extent):
         """出力したXYZタイル群から SQLite(MBTiles) を生成（モック）"""
         QgsMessageLog.logMessage(f"[2/3] MBTiles構築中...", "PMTilesExporter", Qgis.Info)
-        # TODO: Pythonの sqlite3 を用いて metadata テーブルと tiles テーブルを構築します。
 
     def _convert_mbtiles_to_pmtiles(self, mbtiles_path, output_path):
         """MBTiles を PMTiles に変換（モック）"""
         QgsMessageLog.logMessage(f"[3/3] PMTilesへ変換中...", "PMTilesExporter", Qgis.Info)
-        # TODO: 'pmtiles' ライブラリの関数を呼び出して変換を実行します。
-        # 例: 
-        # import pmtiles.convert
-        # pmtiles.convert.mbtiles_to_pmtiles(str(mbtiles_path), str(output_path), max_zoom)

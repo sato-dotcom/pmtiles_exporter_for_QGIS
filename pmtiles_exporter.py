@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 
 from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication, QSize
-from qgis.PyQt.QtGui import QIcon, QImage, QPainter
+from qgis.PyQt.QtGui import QIcon, QImage, QPainter, QColor
 from qgis.PyQt.QtWidgets import QAction, QMessageBox
 from qgis.core import (
     QgsProject, 
@@ -124,6 +124,9 @@ class PMTilesExporter:
 
         settings = QgsMapSettings()
         settings.setLayers(layers)
+        
+        # ★追加: レンダラーの背景色を透過（アルファ値 0）に設定
+        settings.setBackgroundColor(QColor(0, 0, 0, 0))
 
         if extent is None:
             canvas = self.iface.mapCanvas()

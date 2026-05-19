@@ -146,4 +146,3 @@ class PMTilesExporterDialog(QtWidgets.QDialog, FORM_CLASS):
         """チェックされたレイヤーのオブジェクトをリストで取得"""
         # QGISツリー上で現在チェックされている（可視状態の）レイヤーを一括取得
         return QgsProject.instance().layerTreeRoot().checkedLayers()
-Copy

@@ -7,8 +7,9 @@ from pathlib import Path
 from qgis.PyQt import uic
 from qgis.PyQt import QtWidgets
 from qgis.PyQt.QtCore import Qt, QSettings
-from qgis.PyQt.QtWidgets import QListWidgetItem, QMenu, QFileDialog
-from qgis.core import QgsProject
+from qgis.PyQt.QtWidgets import QMenu, QFileDialog, QVBoxLayout
+from qgis.core import QgsProject, QgsLayerTreeModel
+from qgis.gui import QgsLayerTreeView
 
 # This loads your .ui file so that PyQt can populate your plugin with the elements from Qt Designer
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
@@ -23,6 +24,21 @@ class PMTilesExporterDialog(QtWidgets.QDialog, FORM_CLASS):
         # 実行ボタンのテキストを変更
         self.buttonBox.button(QtWidgets.QDialogButtonBox.Ok).setText("PMTiles を出力する")
         
+        # --- Layer Tree を UI に埋め込む ---
+        # QgsLayerTreeView のセットアップ
+        self.layer_tree_view = QgsLayerTreeView(self.layer_tree_container)
+        self.layer_tree_model = QgsLayerTreeModel(QgsProject.instance().layerTreeRoot())
+        
+        # ツリー内でチェックボックス（可視性の切り替え）を許可する
+        self.layer_tree_model.setFlag(QgsLayerTreeModel.AllowNodeChangeVisibility)
+        self.layer_tree_view.setModel(self.layer_tree_model)
+
+        # プレースホルダーのレイアウトに追加
+        layout = QVBoxLayout(self.layer_tree_container)
+        layout.setContentsMargins(0, 0, 0, 0) # 枠線の無駄な余白を消す
+        layout.addWidget(self.layer_tree_view)
+        # ------------------------------------
+
         # シグナルの接続
         self.cmbPreset.currentIndexChanged.connect(self.on_preset_changed)
         self.btnBrowse.clicked.connect(self.on_browse_clicked)
@@ -30,24 +46,9 @@ class PMTilesExporterDialog(QtWidgets.QDialog, FORM_CLASS):
 
     def init_dialog(self):
         """ダイアログを開く際の初期化処理"""
-        self.populate_layers()
+        # QGISツリーの状態と同期するため、レイヤーの個別読み込み処理(populate_layers)は不要になりました
         self.restore_settings()
         self.update_default_output_path()
-
-    def populate_layers(self):
-        """QGISのレイヤーパネル順にレイヤーを取得しリストに追加"""
-        self.listWidgetLayers.clear()
-        root = QgsProject.instance().layerTreeRoot()
-        
-        # レイヤーツリーを再帰的に走査（グループ等にも対応）
-        for child in root.findLayers():
-            layer = child.layer()
-            if layer:
-                item = QListWidgetItem(layer.name())
-                item.setData(Qt.UserRole, layer.id())  # レイヤーIDを保存
-                item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-                item.setCheckState(Qt.Checked)         # デフォルトでチェック
-                self.listWidgetLayers.addItem(item)
 
     def restore_settings(self):
         """QSettingsから前回設定を復元"""
@@ -111,11 +112,11 @@ class PMTilesExporterDialog(QtWidgets.QDialog, FORM_CLASS):
         date_str = datetime.now().strftime("%Y%m%d")
         
         first_layer_name = "layer"
-        for i in range(self.listWidgetLayers.count()):
-            item = self.listWidgetLayers.item(i)
-            if item.checkState() == Qt.Checked:
-                first_layer_name = item.text()
-                break
+        
+        # チェックされたレイヤーから最初のレイヤー名を取得
+        checked_layers = self.get_selected_layers()
+        if checked_layers:
+            first_layer_name = checked_layers[0].name()
 
         candidates = [
             f"{project_title}.pmtiles",
@@ -143,12 +144,6 @@ class PMTilesExporterDialog(QtWidgets.QDialog, FORM_CLASS):
 
     def get_selected_layers(self):
         """チェックされたレイヤーのオブジェクトをリストで取得"""
-        layers = []
-        for i in range(self.listWidgetLayers.count()):
-            item = self.listWidgetLayers.item(i)
-            if item.checkState() == Qt.Checked:
-                layer_id = item.data(Qt.UserRole)
-                layer = QgsProject.instance().mapLayer(layer_id)
-                if layer:
-                    layers.append(layer)
-        return layers
+        # QGISツリー上で現在チェックされている（可視状態の）レイヤーを一括取得
+        return QgsProject.instance().layerTreeRoot().checkedLayers()
+Copy

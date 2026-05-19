@@ -21,7 +21,7 @@
      </property>
      <layout class="QVBoxLayout" name="verticalLayout_2">
       <item>
-       <widget class="QListWidget" name="listWidgetLayers"/>
+       <widget class="QWidget" name="layer_tree_container" native="true"/>
       </item>
      </layout>
     </widget>
@@ -190,3 +190,4 @@
   </connection>
  </connections>
 </ui>
+Copy

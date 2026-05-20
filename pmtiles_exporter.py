@@ -32,7 +32,7 @@ class ExportPmtilesTask(QgsTask):
         QgsMessageLog.logMessage("TASK INIT CALLED", "PMTilesExporter", Qgis.Info)
         super().__init__("PMTiles Export Task", QgsTask.CanCancel)
         self.exporter = exporter
-        self.map_settings = map_settings
+        self.map_settings = QgsMapSettings(map_settings)
         self.output_path = output_path
         self.fmt = fmt
         self.extent_3857 = extent_3857

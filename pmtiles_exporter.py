@@ -27,7 +27,6 @@ from .pmtiles_exporter_dialog import PMTilesExporterDialog
 
 class ExportPmtilesTask(QgsTask):
     """QgsTaskを使用してバックグラウンドで出力処理を行うクラス"""
-    progress_update = pyqtSignal(int, str)
 
     def __init__(self, exporter, map_settings, output_path, fmt, extent_3857, min_zoom, max_zoom):
         super().__init__("PMTiles Export Task", QgsTask.CanCancel)
@@ -51,7 +50,7 @@ class ExportPmtilesTask(QgsTask):
             xyz_output_dir = os.path.join(self.tmp_dir, "tiles")
 
             # 1. 透過PNG生成 (0% ～ 10%)
-            self.progress_update.emit(0, "キャンバスをレンダリング中...")
+            self.setProgress(0)
             QgsMessageLog.logMessage("[1] ベースとなるPNG画像を生成中...", "PMTilesExporter", Qgis.Info)
             
             width = self.map_settings.outputSize().width()
@@ -71,31 +70,14 @@ class ExportPmtilesTask(QgsTask):
                 return False
 
             # 2. XYZ タイル生成 (10% ～ 90%)
-            self.progress_update.emit(10, "XYZタイル生成中...")
+            self.setProgress(10)
             QgsMessageLog.logMessage(f"[2] XYZタイルの生成を開始: Z{self.min_zoom}-{self.max_zoom}", "PMTilesExporter", Qgis.Info)
             
             def progress_cb(current, total):
-                if self.isCanceled(): return False
+                if self.isCanceled(): 
+                    return False
                 
                 percent = 10 + int((current / total) * 80)
-                elapsed = time.time() - self.start_time
-                
-                if percent > 0:
-                    estimated_total = elapsed / (percent / 100.0)
-                    remaining = estimated_total - elapsed
-                    
-                    m, s = divmod(int(remaining), 60)
-                    h, m = divmod(m, 60)
-                    if h > 0:
-                        rem_str = f"{h}時間{m}分{s}秒"
-                    elif m > 0:
-                        rem_str = f"{m}分{s}秒"
-                    else:
-                        rem_str = f"{s}秒"
-                else:
-                    rem_str = "計算中..."
-                    
-                self.progress_update.emit(percent, rem_str)
                 self.setProgress(percent)
                 return True
 
@@ -105,7 +87,7 @@ class ExportPmtilesTask(QgsTask):
                 return False
 
             # 3. 出力形式に応じた分岐処理 (90% ～ 100%)
-            self.progress_update.emit(90, "仕上げ処理中...")
+            self.setProgress(90)
             
             if self.fmt == "xyz":
                 QgsMessageLog.logMessage(f"[3] XYZタイルの仕上げ処理...", "PMTilesExporter", Qgis.Info)
@@ -125,7 +107,7 @@ class ExportPmtilesTask(QgsTask):
                 mbtiles_path = os.path.join(self.tmp_dir, "temp.mbtiles")
                 self.exporter._build_mbtiles_from_xyz(xyz_output_dir, mbtiles_path, self.min_zoom, self.max_zoom, self.extent_3857)
                 
-                self.progress_update.emit(95, "PMTiles変換中...")
+                self.setProgress(95)
                 QgsMessageLog.logMessage(f"[4] PMTiles 変換中...", "PMTilesExporter", Qgis.Info)
                 self.exporter._convert_mbtiles_to_pmtiles(mbtiles_path, self.output_path)
 
@@ -264,7 +246,7 @@ class PMTilesExporter:
 
         # QgsTask を使って非同期実行
         task = ExportPmtilesTask(self, settings, output_path_str, fmt, extent_3857, min_zoom, max_zoom)
-        task.progress_update.connect(self.dlg.update_progress)
+        task.progressChanged.connect(self.dlg.update_progress)
         QgsApplication.taskManager().addTask(task)
 
 
@@ -393,20 +375,19 @@ class PMTilesExporter:
 
     def _generate_leaflet_html(self, xyz_dir, min_zoom, max_zoom):
         """XYZ出力時に Leaflet 用の index.html を生成する"""
-        html_content = f"""<!DOCTYPE html>
-<html>
-<head>
+        html_content = f"""[HTML_START]
+[HEAD_START]
 <meta charset="utf-8" />
 <title>XYZ Tile Viewer</title>
-<style>
+[STYLE_START]
 html, body, #map {{ height: 100%; margin: 0; padding: 0; }}
-</style>
+[STYLE_END]
 <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
-<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-</head>
-<body>
+[SCRIPT_START] src="https://unpkg.com/leaflet/dist/leaflet.js">[SCRIPT_END]
+[HEAD_END]
+[BODY_START]
 <div id="map"></div>
-<script>
+[SCRIPT_START]
 var map = L.map('map').setView([0, 0], 15);
 
 L.tileLayer('./{{z}}/{{x}}/{{y}}.png', {{
@@ -415,9 +396,9 @@ minZoom: {min_zoom},
 tileSize: 256,
 attribution: ''
 }}).addTo(map);
-</script>
-</body>
-</html>"""
+[SCRIPT_END]
+[BODY_END]
+[HTML_END]"""
         
         index_path = os.path.join(xyz_dir, "index.html")
         with open(index_path, "w", encoding="utf-8") as f:

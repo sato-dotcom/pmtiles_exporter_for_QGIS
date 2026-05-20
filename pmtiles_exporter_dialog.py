@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -196,17 +197,31 @@ class PMTilesExporterDialog(QtWidgets.QDialog, FORM_CLASS):
     # 進捗表示・ボタン制御関連
     # ==========================================
     def init_progress(self):
+        self.start_time = time.time()
         self.progressBar.setValue(0)
         self.progressBar.setVisible(True)
         self.label_progress.setVisible(True)
         self.label_progress.setText("準備中…")
 
-    def update_progress(self, percent, remaining_text=""):
-        self.progressBar.setValue(percent)
-        if remaining_text:
-            self.label_progress.setText(f"{percent}% 完了（残り {remaining_text}）")
+    def update_progress(self, percent):
+        # 残り時間計算
+        if percent > 0:
+            elapsed = time.time() - self.start_time
+            estimated_total = elapsed / (percent / 100.0)
+            remaining = estimated_total - elapsed
+            m, s = divmod(int(remaining), 60)
+            h, m = divmod(m, 60)
+            if h > 0:
+                rem_str = f"{h}時間{m}分{s}秒"
+            elif m > 0:
+                rem_str = f"{m}分{s}秒"
+            else:
+                rem_str = f"{s}秒"
         else:
-            self.label_progress.setText(f"{percent}% 完了")
+            rem_str = "計算中..."
+
+        self.progressBar.setValue(percent)
+        self.label_progress.setText(f"{percent}% 完了（残り {rem_str}）")
 
     def finish_progress(self):
         self.progressBar.setValue(100)

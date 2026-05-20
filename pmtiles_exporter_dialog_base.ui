@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>450</width>
-    <height>630</height>
+    <height>660</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -196,6 +196,26 @@
     </widget>
    </item>
    <item>
+    <widget class="QLabel" name="label_progress">
+     <property name="text">
+      <string/>
+     </property>
+     <property name="visible">
+      <bool>false</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QProgressBar" name="progressBar">
+     <property name="value">
+      <number>0</number>
+     </property>
+     <property name="visible">
+      <bool>false</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
     <widget class="QDialogButtonBox" name="buttonBox">
      <property name="orientation">
       <enum>Qt::Horizontal</enum>
@@ -209,12 +229,6 @@
  </widget>
  <resources/>
  <connections>
-  <connection>
-   <sender>buttonBox</sender>
-   <signal>accepted()</signal>
-   <receiver>PMTilesExporterDialogBase</receiver>
-   <slot>accept()</slot>
-  </connection>
   <connection>
    <sender>buttonBox</sender>
    <signal>rejected()</signal>

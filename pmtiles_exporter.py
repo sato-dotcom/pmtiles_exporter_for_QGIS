@@ -3,9 +3,10 @@ import os
 import tempfile
 import shutil
 import math
+import time
 from pathlib import Path
 
-from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication, QSize, QRect, Qt
+from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication, QSize, QRect, Qt, pyqtSignal
 from qgis.PyQt.QtGui import QIcon, QImage, QPainter, QColor
 from qgis.PyQt.QtWidgets import QAction, QMessageBox
 from qgis.core import (
@@ -15,11 +16,146 @@ from qgis.core import (
     QgsMapSettings,
     QgsMapRendererCustomPainterJob,
     QgsCoordinateReferenceSystem,
-    QgsCoordinateTransform
+    QgsCoordinateTransform,
+    QgsTask,
+    QgsApplication
 )
 
 from .resources import *
 from .pmtiles_exporter_dialog import PMTilesExporterDialog
+
+
+class ExportPmtilesTask(QgsTask):
+    """QgsTaskを使用してバックグラウンドで出力処理を行うクラス"""
+    progress_update = pyqtSignal(int, str)
+
+    def __init__(self, exporter, map_settings, output_path, fmt, extent_3857, min_zoom, max_zoom):
+        super().__init__("PMTiles Export Task", QgsTask.CanCancel)
+        self.exporter = exporter
+        self.map_settings = map_settings
+        self.output_path = output_path
+        self.fmt = fmt
+        self.extent_3857 = extent_3857
+        self.min_zoom = min_zoom
+        self.max_zoom = max_zoom
+        
+        self.exception = None
+        self.tmp_dir = None
+        self.start_time = 0
+
+    def run(self):
+        try:
+            self.start_time = time.time()
+            self.tmp_dir = tempfile.mkdtemp()
+            png_path = os.path.join(self.tmp_dir, "base_image.png")
+            xyz_output_dir = os.path.join(self.tmp_dir, "tiles")
+
+            # 1. 透過PNG生成 (0% ～ 10%)
+            self.progress_update.emit(0, "キャンバスをレンダリング中...")
+            QgsMessageLog.logMessage("[1] ベースとなるPNG画像を生成中...", "PMTilesExporter", Qgis.Info)
+            
+            width = self.map_settings.outputSize().width()
+            height = self.map_settings.outputSize().height()
+            image = QImage(width, height, QImage.Format_ARGB32)
+            image.fill(0) 
+
+            painter = QPainter(image)
+            job = QgsMapRendererCustomPainterJob(self.map_settings, painter)
+            job.start()
+            job.waitForFinished()
+            painter.end()
+
+            image.save(str(png_path), "PNG")
+            
+            if self.isCanceled(): 
+                return False
+
+            # 2. XYZ タイル生成 (10% ～ 90%)
+            self.progress_update.emit(10, "XYZタイル生成中...")
+            QgsMessageLog.logMessage(f"[2] XYZタイルの生成を開始: Z{self.min_zoom}-{self.max_zoom}", "PMTilesExporter", Qgis.Info)
+            
+            def progress_cb(current, total):
+                if self.isCanceled(): return False
+                
+                percent = 10 + int((current / total) * 80)
+                elapsed = time.time() - self.start_time
+                
+                if percent > 0:
+                    estimated_total = elapsed / (percent / 100.0)
+                    remaining = estimated_total - elapsed
+                    
+                    m, s = divmod(int(remaining), 60)
+                    h, m = divmod(m, 60)
+                    if h > 0:
+                        rem_str = f"{h}時間{m}分{s}秒"
+                    elif m > 0:
+                        rem_str = f"{m}分{s}秒"
+                    else:
+                        rem_str = f"{s}秒"
+                else:
+                    rem_str = "計算中..."
+                    
+                self.progress_update.emit(percent, rem_str)
+                self.setProgress(percent)
+                return True
+
+            self.exporter._generate_xyz_tiles_bg(png_path, xyz_output_dir, self.min_zoom, self.max_zoom, self.extent_3857, progress_cb)
+            
+            if self.isCanceled(): 
+                return False
+
+            # 3. 出力形式に応じた分岐処理 (90% ～ 100%)
+            self.progress_update.emit(90, "仕上げ処理中...")
+            
+            if self.fmt == "xyz":
+                QgsMessageLog.logMessage(f"[3] XYZタイルの仕上げ処理...", "PMTilesExporter", Qgis.Info)
+                self.exporter._generate_leaflet_html(xyz_output_dir, self.min_zoom, self.max_zoom)
+                if os.path.exists(self.output_path):
+                    shutil.rmtree(self.output_path, ignore_errors=True)
+                shutil.copytree(xyz_output_dir, self.output_path)
+                
+            elif self.fmt == "mbtiles":
+                QgsMessageLog.logMessage(f"[3] MBTiles 生成中...", "PMTilesExporter", Qgis.Info)
+                mbtiles_path = os.path.join(self.tmp_dir, "temp.mbtiles")
+                self.exporter._build_mbtiles_from_xyz(xyz_output_dir, mbtiles_path, self.min_zoom, self.max_zoom, self.extent_3857)
+                shutil.copy2(mbtiles_path, self.output_path)
+                
+            elif self.fmt == "pmtiles":
+                QgsMessageLog.logMessage(f"[3] MBTiles 生成中...", "PMTilesExporter", Qgis.Info)
+                mbtiles_path = os.path.join(self.tmp_dir, "temp.mbtiles")
+                self.exporter._build_mbtiles_from_xyz(xyz_output_dir, mbtiles_path, self.min_zoom, self.max_zoom, self.extent_3857)
+                
+                self.progress_update.emit(95, "PMTiles変換中...")
+                QgsMessageLog.logMessage(f"[4] PMTiles 変換中...", "PMTilesExporter", Qgis.Info)
+                self.exporter._convert_mbtiles_to_pmtiles(mbtiles_path, self.output_path)
+
+            return True
+
+        except Exception as e:
+            self.exception = e
+            import traceback
+            QgsMessageLog.logMessage(f"エラー詳細: {traceback.format_exc()}", "PMTilesExporter", Qgis.Critical)
+            return False
+
+    def finished(self, result):
+        if self.tmp_dir:
+            shutil.rmtree(self.tmp_dir, ignore_errors=True)
+            
+        if result:
+            self.exporter.dlg.finish_progress()
+            self.exporter.dlg.save_settings()
+            self.exporter.iface.messageBar().pushMessage("完了", f"{self.fmt.upper()}の出力が完了しました！", level=Qgis.Success)
+        else:
+            if self.isCanceled():
+                self.exporter.iface.messageBar().pushMessage("キャンセル", "処理がキャンセルされました。", level=Qgis.Info)
+                self.exporter.dlg.label_progress.setText("キャンセルされました。")
+            else:
+                self.exporter.iface.messageBar().pushMessage("エラー", f"出力に失敗しました: {self.exception}", level=Qgis.Critical)
+                self.exporter.dlg.label_progress.setText("エラーが発生しました。")
+            
+        # ボタンを再度有効化する
+        self.exporter.dlg.set_export_button_enabled(True)
+
 
 class PMTilesExporter:
     """QGIS Plugin Implementation."""
@@ -71,21 +207,15 @@ class PMTilesExporter:
         if self.first_start == True:
             self.first_start = False
             self.dlg = PMTilesExporterDialog()
+            # 「出力する」ボタン（OKボタン）がクリックされた時の独自処理を接続
+            self.dlg.buttonBox.accepted.connect(self.start_export_task)
 
         self.dlg.init_dialog()
+        # 非同期タスクを使用するため、モードレスで開くことでUIのブロックを防ぐ
         self.dlg.show()
         
-        result = self.dlg.exec_()
-        if result:
-            self.export_pmtiles()
-
-    # ==========================================
-    # 出力処理 実装部
-    # ==========================================
-    def export_pmtiles(self):
-        """
-        出力形式 (XYZ / MBTiles / PMTiles) に応じて処理を分岐
-        """
+    def start_export_task(self):
+        """UIから設定を取得し、非同期タスクを開始する"""
         output_path_str = self.dlg.txtOutputPath.text()
         if not output_path_str:
             self.iface.messageBar().pushMessage("エラー", "保存先が指定されていません。", level=Qgis.Critical)
@@ -96,116 +226,57 @@ class PMTilesExporter:
         min_zoom = self.dlg.spinMinZoom.value()
         max_zoom = self.dlg.spinMaxZoom.value()
 
-        # 作業用の一時ディレクトリを作成
-        tmp_dir = tempfile.mkdtemp()
-        png_path = os.path.join(tmp_dir, "base_image.png")
-        xyz_output_dir = os.path.join(tmp_dir, "tiles")
-
-        self.iface.messageBar().pushMessage("PMTiles Exporter", "処理を開始しました...", level=Qgis.Info)
-
-        try:
-            # 1. 透過PNGとして出力 (アスペクト比維持)
-            QgsMessageLog.logMessage("[1] ベースとなるPNG画像を生成中...", "PMTilesExporter", Qgis.Info)
-            self.export_layers_to_png(png_path, extent=extent)
-            
-            # 2. XYZ タイル生成
-            QgsMessageLog.logMessage(f"[2] XYZタイルの生成を開始: Z{min_zoom}-{max_zoom}", "PMTilesExporter", Qgis.Info)
-            self.generate_xyz_tiles(png_path, xyz_output_dir, min_zoom, max_zoom, extent)
-            
-            # 3. 出力形式に応じた分岐処理
-            if fmt == "xyz":
-                QgsMessageLog.logMessage(f"[3] XYZタイルの仕上げ処理...", "PMTilesExporter", Qgis.Info)
-                # index.html を自動生成
-                self._generate_leaflet_html(xyz_output_dir, min_zoom, max_zoom)
-                
-                # Tempフォルダのタイル群を指定されたフォルダに移動/コピー
-                if os.path.exists(output_path_str):
-                    shutil.rmtree(output_path_str, ignore_errors=True)
-                shutil.copytree(xyz_output_dir, output_path_str)
-                
-                self.iface.messageBar().pushMessage("完了", f"XYZタイルの出力が完了しました！", level=Qgis.Success)
-                
-            elif fmt == "mbtiles":
-                QgsMessageLog.logMessage(f"[3] MBTiles 生成中...", "PMTilesExporter", Qgis.Info)
-                mbtiles_path = os.path.join(tmp_dir, "temp.mbtiles")
-                self._build_mbtiles_from_xyz(xyz_output_dir, mbtiles_path, min_zoom, max_zoom, extent)
-                
-                # 指定パスへコピー
-                shutil.copy2(mbtiles_path, output_path_str)
-                self.iface.messageBar().pushMessage("完了", f"MBTilesの出力が完了しました！", level=Qgis.Success)
-                
-            elif fmt == "pmtiles":
-                QgsMessageLog.logMessage(f"[3] MBTiles 生成中...", "PMTilesExporter", Qgis.Info)
-                mbtiles_path = os.path.join(tmp_dir, "temp.mbtiles")
-                self._build_mbtiles_from_xyz(xyz_output_dir, mbtiles_path, min_zoom, max_zoom, extent)
-                
-                QgsMessageLog.logMessage(f"[4] PMTiles 変換中...", "PMTilesExporter", Qgis.Info)
-                self._convert_mbtiles_to_pmtiles(mbtiles_path, output_path_str)
-                
-                self.iface.messageBar().pushMessage("完了", f"PMTilesの出力が完了しました！", level=Qgis.Success)
-
-            # 成功したら設定を保存
-            self.dlg.save_settings()
-            
-        except Exception as e:
-            QgsMessageLog.logMessage(f"エラー: {str(e)}", "PMTilesExporter", Qgis.Critical)
-            self.iface.messageBar().pushMessage("エラー", f"出力に失敗しました。ログを確認してください。\n{e}", level=Qgis.Critical)
-        
-        finally:
-            # 終了後に Temp フォルダを削除
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-
-    def export_layers_to_png(self, output_path, extent=None, max_dim=4096):
-        """現在のレイヤーを合成して1枚の PNG を出力する"""
+        # 出力対象のレイヤーを取得
         all_layers = [layer for layer in QgsProject.instance().layerTreeRoot().layerOrder()]
         selected_layers = self.dlg.get_selected_layers()
         layers = [layer for layer in all_layers if layer in selected_layers]
 
         if not layers:
-            raise Exception("出力対象のレイヤーがありません。")
+            self.iface.messageBar().pushMessage("エラー", "出力対象のレイヤーがありません。", level=Qgis.Critical)
+            return
 
+        # ボタンを無効化しプログレスを初期状態に
+        self.dlg.set_export_button_enabled(False)
+        self.dlg.init_progress()
+        self.iface.messageBar().pushMessage("PMTiles Exporter", "バックグラウンド処理を開始しました...", level=Qgis.Info)
+
+        # レンダリング用の設定をメインスレッドで作成
         settings = QgsMapSettings()
         settings.setLayers(layers)
         settings.setBackgroundColor(QColor(0, 0, 0, 0)) # 背景透過
-
-        if extent is None:
-            extent = self.iface.mapCanvas().extent()
-
         settings.setExtent(extent)
 
         ratio = extent.width() / extent.height()
+        max_dim = 4096
         if ratio > 1.0:
             width = max_dim
             height = int(max_dim / ratio)
         else:
             height = max_dim
             width = int(max_dim * ratio)
-
         settings.setOutputSize(QSize(width, height))
 
-        image = QImage(width, height, QImage.Format_ARGB32)
-        image.fill(0) 
+        # 座標系変換もメインスレッドのQgsProjectに依存するため事前に計算しておく
+        crs_src = QgsProject.instance().crs()
+        crs_3857 = QgsCoordinateReferenceSystem("EPSG:3857")
+        transform = QgsCoordinateTransform(crs_src, crs_3857, QgsProject.instance())
+        extent_3857 = transform.transformBoundingBox(extent)
 
-        painter = QPainter(image)
-        job = QgsMapRendererCustomPainterJob(settings, painter)
-        job.start()
-        job.waitForFinished()
-        painter.end()
+        # QgsTask を使って非同期実行
+        task = ExportPmtilesTask(self, settings, output_path_str, fmt, extent_3857, min_zoom, max_zoom)
+        task.progress_update.connect(self.dlg.update_progress)
+        QgsApplication.taskManager().addTask(task)
 
-        image.save(str(output_path), "PNG")
-        return True
 
-    def generate_xyz_tiles(self, png_path, output_dir, min_zoom, max_zoom, extent):
+    # ==========================================
+    # バックグラウンド用処理メソッド
+    # ==========================================
+    def _generate_xyz_tiles_bg(self, png_path, output_dir, min_zoom, max_zoom, extent_3857, progress_cb=None):
         """透過PNGを読み込み、指定されたズームレベルごとにXYZタイルを生成する"""
         source_image = QImage(png_path)
         if source_image.isNull():
             raise Exception("PNG画像の読み込みに失敗しました")
 
-        crs_src = QgsProject.instance().crs()
-        crs_3857 = QgsCoordinateReferenceSystem("EPSG:3857")
-        transform = QgsCoordinateTransform(crs_src, crs_3857, QgsProject.instance())
-        
-        extent_3857 = transform.transformBoundingBox(extent)
         min_x_m = extent_3857.xMinimum()
         max_x_m = extent_3857.xMaximum()
         min_y_m = extent_3857.yMinimum()
@@ -227,9 +298,21 @@ class PMTilesExporter:
             min_y = max_y - 256 * res
             return min_x, min_y, max_x, max_y
 
+        # 総タイル数の事前計算（進捗管理用）
+        total_tiles_to_generate = 0
+        for z in range(min_zoom, max_zoom + 1):
+            t_min_x, t_max_y = meters_to_tile(min_x_m, max_y_m, z)
+            t_max_x, t_min_y = meters_to_tile(max_x_m, min_y_m, z)
+            total_tiles_to_generate += (t_max_x - t_min_x + 1) * (t_min_y - t_max_y + 1)
+
+        if total_tiles_to_generate == 0:
+            return
+
         src_w = source_image.width()
         src_h = source_image.height()
+        
         total_tiles_generated = 0
+        processed_tiles = 0
 
         for z in range(min_zoom, max_zoom + 1):
             t_min_x, t_max_y = meters_to_tile(min_x_m, max_y_m, z)
@@ -243,6 +326,12 @@ class PMTilesExporter:
                 os.makedirs(x_dir, exist_ok=True)
 
                 for ty in range(t_max_y, t_min_y + 1):
+                    processed_tiles += 1
+                    # 1% 進むごとにコールバックで進捗を更新
+                    if processed_tiles % max(1, total_tiles_to_generate // 100) == 0:
+                        if progress_cb and not progress_cb(processed_tiles, total_tiles_to_generate):
+                            return # キャンセル
+
                     t_b_min_x, t_b_min_y, t_b_max_x, t_b_max_y = tile_bounds_meters(tx, ty, z)
 
                     x_ratio_start = (t_b_min_x - min_x_m) / (max_x_m - min_x_m)
@@ -296,7 +385,10 @@ class PMTilesExporter:
                         tile_path = os.path.join(x_dir, f"{ty}.png")
                         tile_image.save(tile_path, "PNG")
                         total_tiles_generated += 1
-
+                        
+        if progress_cb:
+            progress_cb(total_tiles_to_generate, total_tiles_to_generate)
+            
         QgsMessageLog.logMessage(f"XYZタイル生成完了: 計 {total_tiles_generated} 枚のタイルを生成しました。", "PMTilesExporter", Qgis.Info)
 
     def _generate_leaflet_html(self, xyz_dir, min_zoom, max_zoom):

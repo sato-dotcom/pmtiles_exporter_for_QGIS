@@ -191,3 +191,29 @@ class PMTilesExporterDialog(QtWidgets.QDialog, FORM_CLASS):
     def get_selected_layers(self):
         """チェックされたレイヤーのオブジェクトをリストで取得"""
         return QgsProject.instance().layerTreeRoot().checkedLayers()
+        
+    # ==========================================
+    # 進捗表示・ボタン制御関連
+    # ==========================================
+    def init_progress(self):
+        self.progressBar.setValue(0)
+        self.progressBar.setVisible(True)
+        self.label_progress.setVisible(True)
+        self.label_progress.setText("準備中…")
+
+    def update_progress(self, percent, remaining_text=""):
+        self.progressBar.setValue(percent)
+        if remaining_text:
+            self.label_progress.setText(f"{percent}% 完了（残り {remaining_text}）")
+        else:
+            self.label_progress.setText(f"{percent}% 完了")
+
+    def finish_progress(self):
+        self.progressBar.setValue(100)
+        self.label_progress.setText("完了しました！")
+
+    def set_export_button_enabled(self, enabled):
+        """タスク実行中に多重クリックされないようボタンをロックする"""
+        ok_btn = self.buttonBox.button(QtWidgets.QDialogButtonBox.Ok)
+        if ok_btn:
+            ok_btn.setEnabled(enabled)

@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>450</width>
-    <height>550</height>
+    <height>630</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -137,9 +137,42 @@
     </widget>
    </item>
    <item>
+    <widget class="QGroupBox" name="groupBox_Format">
+     <property name="title">
+      <string>4. 出力形式</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_Format">
+      <item>
+       <widget class="QRadioButton" name="radio_xyz">
+        <property name="text">
+         <string>XYZ タイル</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QRadioButton" name="radio_mbtiles">
+        <property name="text">
+         <string>MBTiles</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QRadioButton" name="radio_pmtiles">
+        <property name="text">
+         <string>PMTiles</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
     <widget class="QGroupBox" name="groupBox_Output">
      <property name="title">
-      <string>4. 保存先</string>
+      <string>5. 保存先</string>
      </property>
      <layout class="QHBoxLayout" name="horizontalLayout">
       <item>

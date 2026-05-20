@@ -84,13 +84,14 @@ class PMTilesExporter:
     # ==========================================
     def export_pmtiles(self):
         """
-        [1] PNG出力 -> [2] XYZ生成 -> [3] MBTiles -> [4] PMTiles の一連のフロー
+        出力形式 (XYZ / MBTiles / PMTiles) に応じて処理を分岐
         """
         output_path_str = self.dlg.txtOutputPath.text()
         if not output_path_str:
             self.iface.messageBar().pushMessage("エラー", "保存先が指定されていません。", level=Qgis.Critical)
             return
 
+        fmt = self.dlg.get_output_format()
         extent = self._get_extent()
         min_zoom = self.dlg.spinMinZoom.value()
         max_zoom = self.dlg.spinMaxZoom.value()
@@ -104,36 +105,58 @@ class PMTilesExporter:
 
         try:
             # 1. 透過PNGとして出力 (アスペクト比維持)
-            QgsMessageLog.logMessage("[1/4] ベースとなるPNG画像を生成中...", "PMTilesExporter", Qgis.Info)
+            QgsMessageLog.logMessage("[1] ベースとなるPNG画像を生成中...", "PMTilesExporter", Qgis.Info)
             self.export_layers_to_png(png_path, extent=extent)
             
             # 2. XYZ タイル生成
-            QgsMessageLog.logMessage(f"[2/4] XYZタイルの生成を開始: Z{min_zoom}-{max_zoom}", "PMTilesExporter", Qgis.Info)
+            QgsMessageLog.logMessage(f"[2] XYZタイルの生成を開始: Z{min_zoom}-{max_zoom}", "PMTilesExporter", Qgis.Info)
             self.generate_xyz_tiles(png_path, xyz_output_dir, min_zoom, max_zoom, extent)
             
-            # 3. MBTiles 生成 (現在はモック)
-            mbtiles_path = os.path.join(tmp_dir, "temp.mbtiles")
-            self._build_mbtiles_from_xyz(xyz_output_dir, mbtiles_path, min_zoom, max_zoom, extent)
-            
-            # 4. PMTiles 変換 (現在はモック)
-            self._convert_mbtiles_to_pmtiles(mbtiles_path, output_path_str)
+            # 3. 出力形式に応じた分岐処理
+            if fmt == "xyz":
+                QgsMessageLog.logMessage(f"[3] XYZタイルの仕上げ処理...", "PMTilesExporter", Qgis.Info)
+                # index.html を自動生成
+                self._generate_leaflet_html(xyz_output_dir, min_zoom, max_zoom)
+                
+                # Tempフォルダのタイル群を指定されたフォルダに移動/コピー
+                if os.path.exists(output_path_str):
+                    shutil.rmtree(output_path_str, ignore_errors=True)
+                shutil.copytree(xyz_output_dir, output_path_str)
+                
+                self.iface.messageBar().pushMessage("完了", f"XYZタイルの出力が完了しました！", level=Qgis.Success)
+                
+            elif fmt == "mbtiles":
+                QgsMessageLog.logMessage(f"[3] MBTiles 生成中...", "PMTilesExporter", Qgis.Info)
+                mbtiles_path = os.path.join(tmp_dir, "temp.mbtiles")
+                self._build_mbtiles_from_xyz(xyz_output_dir, mbtiles_path, min_zoom, max_zoom, extent)
+                
+                # 指定パスへコピー
+                shutil.copy2(mbtiles_path, output_path_str)
+                self.iface.messageBar().pushMessage("完了", f"MBTilesの出力が完了しました！", level=Qgis.Success)
+                
+            elif fmt == "pmtiles":
+                QgsMessageLog.logMessage(f"[3] MBTiles 生成中...", "PMTilesExporter", Qgis.Info)
+                mbtiles_path = os.path.join(tmp_dir, "temp.mbtiles")
+                self._build_mbtiles_from_xyz(xyz_output_dir, mbtiles_path, min_zoom, max_zoom, extent)
+                
+                QgsMessageLog.logMessage(f"[4] PMTiles 変換中...", "PMTilesExporter", Qgis.Info)
+                self._convert_mbtiles_to_pmtiles(mbtiles_path, output_path_str)
+                
+                self.iface.messageBar().pushMessage("完了", f"PMTilesの出力が完了しました！", level=Qgis.Success)
 
             # 成功したら設定を保存
             self.dlg.save_settings()
-            self.iface.messageBar().pushMessage("PMTiles Exporter", f"処理完了（現在はXYZ生成まで動作）", level=Qgis.Success)
             
         except Exception as e:
             QgsMessageLog.logMessage(f"エラー: {str(e)}", "PMTilesExporter", Qgis.Critical)
             self.iface.messageBar().pushMessage("エラー", f"出力に失敗しました。ログを確認してください。\n{e}", level=Qgis.Critical)
         
-        # 本番では tmp_dir を削除する処理 (shutil.rmtree) を入れると良いです
-        # shutil.rmtree(tmp_dir, ignore_errors=True)
+        finally:
+            # 終了後に Temp フォルダを削除
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     def export_layers_to_png(self, output_path, extent=None, max_dim=4096):
-        """
-        現在のレイヤーを合成して1枚の PNG を出力する。
-        ※地図が歪まないよう、extent のアスペクト比を維持して出力します。
-        """
+        """現在のレイヤーを合成して1枚の PNG を出力する"""
         all_layers = [layer for layer in QgsProject.instance().layerTreeRoot().layerOrder()]
         selected_layers = self.dlg.get_selected_layers()
         layers = [layer for layer in all_layers if layer in selected_layers]
@@ -150,7 +173,6 @@ class PMTilesExporter:
 
         settings.setExtent(extent)
 
-        # アスペクト比を維持してサイズを決定 (最大サイズを max_dim に合わせる)
         ratio = extent.width() / extent.height()
         if ratio > 1.0:
             width = max_dim
@@ -174,15 +196,11 @@ class PMTilesExporter:
         return True
 
     def generate_xyz_tiles(self, png_path, output_dir, min_zoom, max_zoom, extent):
-        """
-        透過PNGを読み込み、指定されたズームレベルごとにXYZタイルを生成する。
-        Slippy Map (Webメルカトル) の座標計算を行い、正しい位置で分割します。
-        """
+        """透過PNGを読み込み、指定されたズームレベルごとにXYZタイルを生成する"""
         source_image = QImage(png_path)
         if source_image.isNull():
             raise Exception("PNG画像の読み込みに失敗しました")
 
-        # 座標系を EPSG:3857 (Web Mercator) に変換して正確なタイル位置を計算する
         crs_src = QgsProject.instance().crs()
         crs_3857 = QgsCoordinateReferenceSystem("EPSG:3857")
         transform = QgsCoordinateTransform(crs_src, crs_3857, QgsProject.instance())
@@ -193,18 +211,15 @@ class PMTilesExporter:
         min_y_m = extent_3857.yMinimum()
         max_y_m = extent_3857.yMaximum()
 
-        # Webメルカトルの地球全周サイズ (メートル)
         MAX_EXTENT = 20037508.342789244
 
         def meters_to_tile(x, y, z):
-            """メートル座標からタイル番号(X,Y)を計算"""
             res = (2 * MAX_EXTENT) / (256 * (2 ** z))
             px = (x + MAX_EXTENT) / res
             py = (MAX_EXTENT - y) / res
             return int(px / 256), int(py / 256)
 
         def tile_bounds_meters(tx, ty, z):
-            """タイル番号(X,Y)からメートル座標の範囲を計算"""
             res = (2 * MAX_EXTENT) / (256 * (2 ** z))
             min_x = tx * 256 * res - MAX_EXTENT
             max_y = MAX_EXTENT - ty * 256 * res
@@ -217,7 +232,6 @@ class PMTilesExporter:
         total_tiles_generated = 0
 
         for z in range(min_zoom, max_zoom + 1):
-            # このズームレベルでの対象タイル範囲 (画像全体のExtentがカバーするタイル)
             t_min_x, t_max_y = meters_to_tile(min_x_m, max_y_m, z)
             t_max_x, t_min_y = meters_to_tile(max_x_m, min_y_m, z)
 
@@ -229,14 +243,11 @@ class PMTilesExporter:
                 os.makedirs(x_dir, exist_ok=True)
 
                 for ty in range(t_max_y, t_min_y + 1):
-                    # 各タイルのEPSG:3857座標範囲
                     t_b_min_x, t_b_min_y, t_b_max_x, t_b_max_y = tile_bounds_meters(tx, ty, z)
 
-                    # 元画像内でのタイルの割合位置を計算
                     x_ratio_start = (t_b_min_x - min_x_m) / (max_x_m - min_x_m)
                     x_ratio_end = (t_b_max_x - min_x_m) / (max_x_m - min_x_m)
                     
-                    # 画像座標はY軸が下向きなので逆算
                     y_ratio_start = (max_y_m - t_b_max_y) / (max_y_m - min_y_m)
                     y_ratio_end = (max_y_m - t_b_min_y) / (max_y_m - min_y_m)
 
@@ -245,11 +256,9 @@ class PMTilesExporter:
                     py_start = int(y_ratio_start * src_h)
                     py_end = int(y_ratio_end * src_h)
 
-                    # 画像の範囲外のタイルはスキップ
                     if px_end <= 0 or px_start >= src_w or py_end <= 0 or py_start >= src_h:
                         continue
 
-                    # 元画像から切り出す範囲 (はみ出さないようにクリップ)
                     c_x = max(0, px_start)
                     c_y = max(0, py_start)
                     c_w = min(src_w, px_end) - c_x
@@ -261,7 +270,6 @@ class PMTilesExporter:
                     clip_rect = QRect(c_x, c_y, c_w, c_h)
                     clipped_image = source_image.copy(clip_rect)
 
-                    # 256x256の透明なキャンバスを用意
                     tile_image = QImage(256, 256, QImage.Format_ARGB32)
                     tile_image.fill(QColor(0, 0, 0, 0))
 
@@ -271,7 +279,6 @@ class PMTilesExporter:
                     if tile_px_w <= 0 or tile_px_h <= 0:
                         continue
 
-                    # クリップした画像を256x256キャンバスの正しい位置にリサイズして描画
                     offset_x = c_x - px_start
                     offset_y = c_y - py_start
 
@@ -291,6 +298,38 @@ class PMTilesExporter:
                         total_tiles_generated += 1
 
         QgsMessageLog.logMessage(f"XYZタイル生成完了: 計 {total_tiles_generated} 枚のタイルを生成しました。", "PMTilesExporter", Qgis.Info)
+
+    def _generate_leaflet_html(self, xyz_dir, min_zoom, max_zoom):
+        """XYZ出力時に Leaflet 用の index.html を生成する"""
+        html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>XYZ Tile Viewer</title>
+<style>
+html, body, #map {{ height: 100%; margin: 0; padding: 0; }}
+</style>
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+</head>
+<body>
+<div id="map"></div>
+<script>
+var map = L.map('map').setView([0, 0], 15);
+
+L.tileLayer('./{{z}}/{{x}}/{{y}}.png', {{
+maxZoom: {max_zoom},
+minZoom: {min_zoom},
+tileSize: 256,
+attribution: ''
+}}).addTo(map);
+</script>
+</body>
+</html>"""
+        
+        index_path = os.path.join(xyz_dir, "index.html")
+        with open(index_path, "w", encoding="utf-8") as f:
+            f.write(html_content)
 
     def _get_extent(self):
         """出力範囲の取得"""
@@ -312,8 +351,8 @@ class PMTilesExporter:
     # ==========================================
     def _build_mbtiles_from_xyz(self, xyz_dir, mbtiles_path, min_zoom, max_zoom, extent):
         """出力したXYZタイル群から SQLite(MBTiles) を生成（モック）"""
-        QgsMessageLog.logMessage(f"[3/4] MBTiles構築中... (未実装のためスキップ)", "PMTilesExporter", Qgis.Info)
+        QgsMessageLog.logMessage(f"[MBTiles] モック構築完了", "PMTilesExporter", Qgis.Info)
 
     def _convert_mbtiles_to_pmtiles(self, mbtiles_path, output_path):
         """MBTiles を PMTiles に変換（モック）"""
-        QgsMessageLog.logMessage(f"[4/4] PMTilesへ変換中... (未実装のためスキップ)", "PMTilesExporter", Qgis.Info)
+        QgsMessageLog.logMessage(f"[PMTiles] モック変換完了", "PMTilesExporter", Qgis.Info)

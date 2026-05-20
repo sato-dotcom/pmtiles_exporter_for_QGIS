@@ -22,7 +22,7 @@ class PMTilesExporterDialog(QtWidgets.QDialog, FORM_CLASS):
         self.setupUi(self)
         
         # 実行ボタンのテキストを変更
-        self.buttonBox.button(QtWidgets.QDialogButtonBox.Ok).setText("PMTiles を出力する")
+        self.buttonBox.button(QtWidgets.QDialogButtonBox.Ok).setText("出力する")
         
         # --- Layer Tree を UI に埋め込む ---
         # QgsLayerTreeView のセットアップ
@@ -43,12 +43,45 @@ class PMTilesExporterDialog(QtWidgets.QDialog, FORM_CLASS):
         self.cmbPreset.currentIndexChanged.connect(self.on_preset_changed)
         self.btnBrowse.clicked.connect(self.on_browse_clicked)
         self.btnCandidates.clicked.connect(self.show_candidates_menu)
+        
+        # 出力形式の変更シグナル（拡張子自動追従のため）
+        self.radio_xyz.toggled.connect(self.update_output_path_extension)
+        self.radio_mbtiles.toggled.connect(self.update_output_path_extension)
+        self.radio_pmtiles.toggled.connect(self.update_output_path_extension)
 
     def init_dialog(self):
         """ダイアログを開く際の初期化処理"""
-        # QGISツリーの状態と同期するため、レイヤーの個別読み込み処理(populate_layers)は不要になりました
         self.restore_settings()
         self.update_default_output_path()
+
+    def get_output_format(self):
+        """選択された出力形式を取得"""
+        if self.radio_xyz.isChecked():
+            return "xyz"
+        elif self.radio_mbtiles.isChecked():
+            return "mbtiles"
+        else:
+            return "pmtiles"
+
+    def update_output_path_extension(self):
+        """出力形式が変更されたら保存先パスの拡張子を合わせる"""
+        current_path = self.txtOutputPath.text()
+        if not current_path:
+            return
+            
+        p = Path(current_path)
+        fmt = self.get_output_format()
+        
+        if fmt == "xyz":
+            # XYZなら拡張子を削除してフォルダパスにする
+            if p.suffix in ['.pmtiles', '.mbtiles']:
+                self.txtOutputPath.setText(str(p.with_suffix('')))
+        elif fmt == "mbtiles":
+            if p.suffix != '.mbtiles':
+                self.txtOutputPath.setText(str(p.with_suffix('.mbtiles')))
+        else:
+            if p.suffix != '.pmtiles':
+                self.txtOutputPath.setText(str(p.with_suffix('.pmtiles')))
 
     def restore_settings(self):
         """QSettingsから前回設定を復元"""
@@ -103,7 +136,11 @@ class PMTilesExporterDialog(QtWidgets.QDialog, FORM_CLASS):
             project_title = Path(project_path).stem if project_path else "Untitled"
                 
         project_dir = QgsProject.instance().homePath() or os.path.expanduser("~")
-        default_path = os.path.join(project_dir, f"{project_title}.pmtiles")
+        
+        fmt = self.get_output_format()
+        ext = "" if fmt == "xyz" else f".{fmt}"
+        
+        default_path = os.path.join(project_dir, f"{project_title}{ext}")
         self.txtOutputPath.setText(default_path)
 
     def show_candidates_menu(self):
@@ -113,16 +150,18 @@ class PMTilesExporterDialog(QtWidgets.QDialog, FORM_CLASS):
         
         first_layer_name = "layer"
         
-        # チェックされたレイヤーから最初のレイヤー名を取得
         checked_layers = self.get_selected_layers()
         if checked_layers:
             first_layer_name = checked_layers[0].name()
 
+        fmt = self.get_output_format()
+        ext = "" if fmt == "xyz" else f".{fmt}"
+
         candidates = [
-            f"{project_title}.pmtiles",
-            f"overlay_{date_str}.pmtiles",
-            f"{project_title}_{date_str}.pmtiles",
-            f"{first_layer_name}.pmtiles"
+            f"{project_title}{ext}",
+            f"overlay_{date_str}{ext}",
+            f"{project_title}_{date_str}{ext}",
+            f"{first_layer_name}{ext}"
         ]
         
         project_dir = QgsProject.instance().homePath() or os.path.expanduser("~")
@@ -130,7 +169,6 @@ class PMTilesExporterDialog(QtWidgets.QDialog, FORM_CLASS):
         menu = QMenu(self)
         for cand in candidates:
             action = menu.addAction(cand)
-            # lambda内で変数を束縛するために c=cand としている
             action.triggered.connect(lambda checked, c=cand: self.txtOutputPath.setText(os.path.join(project_dir, c)))
             
         menu.exec_(self.btnCandidates.mapToGlobal(self.btnCandidates.rect().bottomLeft()))
@@ -138,11 +176,18 @@ class PMTilesExporterDialog(QtWidgets.QDialog, FORM_CLASS):
     def on_browse_clicked(self):
         """保存先選択ダイアログ"""
         project_dir = QgsProject.instance().homePath() or os.path.expanduser("~")
-        file_path, _ = QFileDialog.getSaveFileName(self, "保存先を選択", project_dir, "PMTiles (*.pmtiles)")
+        fmt = self.get_output_format()
+        
+        if fmt == "xyz":
+            file_path = QFileDialog.getExistingDirectory(self, "保存先フォルダを選択", project_dir)
+        elif fmt == "mbtiles":
+            file_path, _ = QFileDialog.getSaveFileName(self, "保存先を選択", project_dir, "MBTiles (*.mbtiles)")
+        else:
+            file_path, _ = QFileDialog.getSaveFileName(self, "保存先を選択", project_dir, "PMTiles (*.pmtiles)")
+            
         if file_path:
             self.txtOutputPath.setText(file_path)
 
     def get_selected_layers(self):
         """チェックされたレイヤーのオブジェクトをリストで取得"""
-        # QGISツリー上で現在チェックされている（可視状態の）レイヤーを一括取得
         return QgsProject.instance().layerTreeRoot().checkedLayers()

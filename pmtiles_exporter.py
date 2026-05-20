@@ -29,6 +29,7 @@ class ExportPmtilesTask(QgsTask):
     """QgsTaskを使用してバックグラウンドで出力処理を行うクラス"""
 
     def __init__(self, exporter, map_settings, output_path, fmt, extent_3857, min_zoom, max_zoom):
+        QgsMessageLog.logMessage("TASK INIT CALLED", "PMTilesExporter", Qgis.Info)
         super().__init__("PMTiles Export Task", QgsTask.CanCancel)
         self.exporter = exporter
         self.map_settings = map_settings
@@ -41,9 +42,12 @@ class ExportPmtilesTask(QgsTask):
         self.exception = None
         self.tmp_dir = None
         self.start_time = 0
+        QgsMessageLog.logMessage("TASK INIT END", "PMTilesExporter", Qgis.Info)
 
     def run(self):
         try:
+            QgsMessageLog.logMessage("TASK RUN STARTED", "PMTilesExporter", Qgis.Info)
+            QgsMessageLog.logMessage("TASK RUN ENTERED", "PMTilesExporter", Qgis.Info)
             self.start_time = time.time()
             self.tmp_dir = tempfile.mkdtemp()
             png_path = os.path.join(self.tmp_dir, "base_image.png")
@@ -111,15 +115,19 @@ class ExportPmtilesTask(QgsTask):
                 QgsMessageLog.logMessage(f"[4] PMTiles 変換中...", "PMTilesExporter", Qgis.Info)
                 self.exporter._convert_mbtiles_to_pmtiles(mbtiles_path, self.output_path)
 
+            QgsMessageLog.logMessage("TASK RUN COMPLETED", "PMTilesExporter", Qgis.Info)
             return True
 
         except Exception as e:
             self.exception = e
             import traceback
+            QgsMessageLog.logMessage(f"TASK RUN EXCEPTION: {str(e)}", "PMTilesExporter", Qgis.Critical)
             QgsMessageLog.logMessage(f"エラー詳細: {traceback.format_exc()}", "PMTilesExporter", Qgis.Critical)
             return False
 
     def finished(self, result):
+        QgsMessageLog.logMessage("TASK FINISHED CALLED", "PMTilesExporter", Qgis.Info)
+        QgsMessageLog.logMessage(f"TASK FINISHED result={result}", "PMTilesExporter", Qgis.Info)
         if self.tmp_dir:
             shutil.rmtree(self.tmp_dir, ignore_errors=True)
             
@@ -238,6 +246,9 @@ class PMTilesExporter:
             width = int(max_dim * ratio)
         settings.setOutputSize(QSize(width, height))
 
+        QgsMessageLog.logMessage(f"Extent: {extent.toString()}", "PMTilesExporter", Qgis.Info)
+        QgsMessageLog.logMessage(f"Output size: {width} x {height}", "PMTilesExporter", Qgis.Info)
+
         # 座標系変換もメインスレッドのQgsProjectに依存するため事前に計算しておく
         crs_src = QgsProject.instance().crs()
         crs_3857 = QgsCoordinateReferenceSystem("EPSG:3857")
@@ -246,7 +257,8 @@ class PMTilesExporter:
 
         # QgsTask を使って非同期実行
         task = ExportPmtilesTask(self, settings, output_path_str, fmt, extent_3857, min_zoom, max_zoom)
-        task.progressChanged.connect(self.dlg.update_progress)
+        # スレッド間通信のためQueuedConnectionを使用
+        task.progressChanged.connect(self.dlg.update_progress, Qt.QueuedConnection)
         QgsApplication.taskManager().addTask(task)
 
 

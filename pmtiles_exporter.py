@@ -18,7 +18,8 @@ from qgis.core import (
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
     QgsTask,
-    QgsApplication
+    QgsApplication,
+    QgsRectangle
 )
 
 from .resources import *
@@ -28,14 +29,14 @@ from .pmtiles_exporter_dialog import PMTilesExporterDialog
 class ExportPmtilesTask(QgsTask):
     """QgsTaskを使用してバックグラウンドで出力処理を行うクラス"""
 
-    def __init__(self, exporter, map_settings, output_path, fmt, extent_3857, min_zoom, max_zoom):
+    def __init__(self, exporter, map_settings, output_path, fmt, extent_3857_tuple, min_zoom, max_zoom):
         QgsMessageLog.logMessage("TASK INIT CALLED", "PMTilesExporter", Qgis.Info)
         super().__init__("PMTiles Export Task", QgsTask.CanCancel)
         self.exporter = exporter
         self.map_settings = QgsMapSettings(map_settings)
         self.output_path = output_path
         self.fmt = fmt
-        self.extent_3857 = extent_3857
+        self.extent_3857_tuple = extent_3857_tuple
         self.min_zoom = min_zoom
         self.max_zoom = max_zoom
         
@@ -46,6 +47,9 @@ class ExportPmtilesTask(QgsTask):
 
     def run(self):
         try:
+            xmin, ymin, xmax, ymax = self.extent_3857_tuple
+            self.extent_3857 = QgsRectangle(xmin, ymin, xmax, ymax)
+
             QgsMessageLog.logMessage("TASK RUN STARTED", "PMTilesExporter", Qgis.Info)
             QgsMessageLog.logMessage("TASK RUN ENTERED", "PMTilesExporter", Qgis.Info)
             self.start_time = time.time()
@@ -255,8 +259,15 @@ class PMTilesExporter:
         transform = QgsCoordinateTransform(crs_src, crs_3857, QgsProject.instance())
         extent_3857 = transform.transformBoundingBox(extent)
 
+        extent_3857_tuple = (
+            extent_3857.xMinimum(),
+            extent_3857.yMinimum(),
+            extent_3857.xMaximum(),
+            extent_3857.yMaximum()
+        )
+
         # QgsTask を使って非同期実行
-        task = ExportPmtilesTask(self, settings, output_path_str, fmt, extent_3857, min_zoom, max_zoom)
+        task = ExportPmtilesTask(self, settings, output_path_str, fmt, extent_3857_tuple, min_zoom, max_zoom)
         # スレッド間通信のためQueuedConnectionを使用
         task.progressChanged.connect(self.dlg.update_progress, Qt.QueuedConnection)
         QgsApplication.taskManager().addTask(task)

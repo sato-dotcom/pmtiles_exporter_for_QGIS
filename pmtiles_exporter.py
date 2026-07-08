@@ -29,23 +29,16 @@ from .pmtiles_exporter_dialog import PMTilesExporterDialog
 class ExportPmtilesTask(QgsTask):
     """QgsTaskを使用してバックグラウンドで出力処理を行うクラス"""
 
-    def __init__(self, map_settings, output_path, fmt, extent_3857_tuple, min_zoom, max_zoom,
-                 generate_xyz_func, generate_mbtiles_func, convert_pmtiles_func, generate_leaflet_func, finish_func):
+    def __init__(self, exporter, map_settings, output_path, fmt, extent_3857_tuple, min_zoom, max_zoom):
         QgsMessageLog.logMessage("TASK INIT CALLED", "PMTilesExporter", Qgis.Info)
         super().__init__("PMTiles Export Task", QgsTask.CanCancel)
+        self.exporter = exporter
         self.map_settings = QgsMapSettings(map_settings)
         self.output_path = output_path
         self.fmt = fmt
         self.extent_3857_tuple = extent_3857_tuple
         self.min_zoom = min_zoom
         self.max_zoom = max_zoom
-        
-        # UIやQgsProjectに依存しない純粋な関数を保持
-        self.generate_xyz = generate_xyz_func
-        self.generate_mbtiles = generate_mbtiles_func
-        self.convert_pmtiles = convert_pmtiles_func
-        self.generate_leaflet = generate_leaflet_func
-        self.finish_func = finish_func
         
         self.exception = None
         self.tmp_dir = None
@@ -96,7 +89,7 @@ class ExportPmtilesTask(QgsTask):
                 self.setProgress(percent)
                 return True
 
-            self.generate_xyz(png_path, xyz_output_dir, self.min_zoom, self.max_zoom, self.extent_3857, progress_cb)
+            self.exporter._generate_xyz_tiles_bg(png_path, xyz_output_dir, self.min_zoom, self.max_zoom, self.extent_3857, progress_cb)
             
             if self.isCanceled(): 
                 return False
@@ -106,7 +99,7 @@ class ExportPmtilesTask(QgsTask):
             
             if self.fmt == "xyz":
                 QgsMessageLog.logMessage(f"[3] XYZタイルの仕上げ処理...", "PMTilesExporter", Qgis.Info)
-                self.generate_leaflet(xyz_output_dir, self.min_zoom, self.max_zoom)
+                self.exporter._generate_leaflet_html(xyz_output_dir, self.min_zoom, self.max_zoom)
                 if os.path.exists(self.output_path):
                     shutil.rmtree(self.output_path, ignore_errors=True)
                 shutil.copytree(xyz_output_dir, self.output_path)
@@ -114,17 +107,17 @@ class ExportPmtilesTask(QgsTask):
             elif self.fmt == "mbtiles":
                 QgsMessageLog.logMessage(f"[3] MBTiles 生成中...", "PMTilesExporter", Qgis.Info)
                 mbtiles_path = os.path.join(self.tmp_dir, "temp.mbtiles")
-                self.generate_mbtiles(xyz_output_dir, mbtiles_path, self.min_zoom, self.max_zoom, self.extent_3857)
+                self.exporter._build_mbtiles_from_xyz(xyz_output_dir, mbtiles_path, self.min_zoom, self.max_zoom, self.extent_3857)
                 shutil.copy2(mbtiles_path, self.output_path)
                 
             elif self.fmt == "pmtiles":
                 QgsMessageLog.logMessage(f"[3] MBTiles 生成中...", "PMTilesExporter", Qgis.Info)
                 mbtiles_path = os.path.join(self.tmp_dir, "temp.mbtiles")
-                self.generate_mbtiles(xyz_output_dir, mbtiles_path, self.min_zoom, self.max_zoom, self.extent_3857)
+                self.exporter._build_mbtiles_from_xyz(xyz_output_dir, mbtiles_path, self.min_zoom, self.max_zoom, self.extent_3857)
                 
                 self.setProgress(95)
                 QgsMessageLog.logMessage(f"[4] PMTiles 変換中...", "PMTilesExporter", Qgis.Info)
-                self.convert_pmtiles(mbtiles_path, self.output_path)
+                self.exporter._convert_mbtiles_to_pmtiles(mbtiles_path, self.output_path)
 
             QgsMessageLog.logMessage("TASK RUN COMPLETED", "PMTilesExporter", Qgis.Info)
             return True
@@ -142,9 +135,20 @@ class ExportPmtilesTask(QgsTask):
         if self.tmp_dir:
             shutil.rmtree(self.tmp_dir, ignore_errors=True)
             
-        # UIの更新処理は渡されたコールバック関数でメインスレッドに委譲
-        if self.finish_func:
-            self.finish_func(result, self.fmt, self.exception, self.isCanceled())
+        if result:
+            self.exporter.dlg.finish_progress()
+            self.exporter.dlg.save_settings()
+            self.exporter.iface.messageBar().pushMessage("完了", f"{self.fmt.upper()}の出力が完了しました！", level=Qgis.Success)
+        else:
+            if self.isCanceled():
+                self.exporter.iface.messageBar().pushMessage("キャンセル", "処理がキャンセルされました。", level=Qgis.Info)
+                self.exporter.dlg.label_progress.setText("キャンセルされました。")
+            else:
+                self.exporter.iface.messageBar().pushMessage("エラー", f"出力に失敗しました: {self.exception}", level=Qgis.Critical)
+                self.exporter.dlg.label_progress.setText("エラーが発生しました。")
+            
+        # ボタンを再度有効化する
+        self.exporter.dlg.set_export_button_enabled(True)
 
 
 class PMTilesExporter:
@@ -263,40 +267,11 @@ class PMTilesExporter:
         )
 
         # QgsTask を使って非同期実行
-        # exporter オブジェクト全体ではなく、個別の関数（callable）を渡す
-        task = ExportPmtilesTask(
-            map_settings=settings,
-            output_path=output_path_str,
-            fmt=fmt,
-            extent_3857_tuple=extent_3857_tuple,
-            min_zoom=min_zoom,
-            max_zoom=max_zoom,
-            generate_xyz_func=self._generate_xyz_tiles_bg,
-            generate_mbtiles_func=self._build_mbtiles_from_xyz,
-            convert_pmtiles_func=self._convert_mbtiles_to_pmtiles,
-            generate_leaflet_func=self._generate_leaflet_html,
-            finish_func=self._on_task_finished
-        )
+        task = ExportPmtilesTask(self, settings, output_path_str, fmt, extent_3857_tuple, min_zoom, max_zoom)
         # スレッド間通信のためQueuedConnectionを使用
         task.progressChanged.connect(self.dlg.update_progress, Qt.QueuedConnection)
         QgsApplication.taskManager().addTask(task)
 
-    def _on_task_finished(self, result, fmt, exception, is_canceled):
-        """タスク完了時にメインスレッドでUI更新を行う"""
-        if result:
-            self.dlg.finish_progress()
-            self.dlg.save_settings()
-            self.iface.messageBar().pushMessage("完了", f"{fmt.upper()}の出力が完了しました！", level=Qgis.Success)
-        else:
-            if is_canceled:
-                self.iface.messageBar().pushMessage("キャンセル", "処理がキャンセルされました。", level=Qgis.Info)
-                self.dlg.label_progress.setText("キャンセルされました。")
-            else:
-                self.iface.messageBar().pushMessage("エラー", f"出力に失敗しました: {exception}", level=Qgis.Critical)
-                self.dlg.label_progress.setText("エラーが発生しました。")
-            
-        # ボタンを再度有効化する
-        self.dlg.set_export_button_enabled(True)
 
     # ==========================================
     # バックグラウンド用処理メソッド

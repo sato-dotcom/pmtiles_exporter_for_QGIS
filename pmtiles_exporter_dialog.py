@@ -220,7 +220,7 @@ class PMTilesExporterDialog(QtWidgets.QDialog, FORM_CLASS):
         else:
             rem_str = "計算中..."
 
-        self.progressBar.setValue(percent)
+        self.progressBar.setValue(int(percent))
         self.label_progress.setText(f"{percent}% 完了（残り {rem_str}）")
 
     def finish_progress(self):

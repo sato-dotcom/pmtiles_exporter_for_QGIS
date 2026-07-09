@@ -232,8 +232,24 @@ class PMTilesExporter:
                 QMessageBox.information(self.iface.mainWindow(), "PMTiles Exporter", "MBTilesの出力が完了しました！")
 
             elif "PMTiles" in tile_format:
-                QMessageBox.information(self.iface.mainWindow(), "PMTiles Exporter", "PMTiles出力はまだ未実装です。")
-                return False
+                log("PMTiles出力: まずXYZタイルを生成します...")
+                self.export_xyz_tiles(output_folder, extent, extent_crs, min_zoom, max_zoom)
+                
+                mbtiles_path = os.path.join(output_folder, "output.mbtiles")
+                log(f"MBTilesの生成を開始します: {mbtiles_path}")
+                
+                # Bounds計算用 (EPSG:4326)
+                crs_4326 = QgsCoordinateReferenceSystem("EPSG:4326")
+                transform_4326 = QgsCoordinateTransform(extent_crs, crs_4326, QgsProject.instance())
+                extent_4326 = transform_4326.transformBoundingBox(extent)
+                
+                self.export_mbtiles_from_xyz(output_folder, mbtiles_path, min_zoom, max_zoom, extent_4326)
+
+                pmtiles_path = os.path.join(output_folder, "output.pmtiles")
+                log(f"PMTilesの生成を開始します: {pmtiles_path}")
+                
+                self.export_pmtiles_from_mbtiles(mbtiles_path, pmtiles_path)
+                QMessageBox.information(self.iface.mainWindow(), "PMTiles Exporter", "PMTilesの出力が完了しました！")
 
             self.dlg.finish_progress()
             log("エクスポート処理が正常に完了しました。")
@@ -542,3 +558,41 @@ class PMTilesExporter:
         
         self.dlg.update_progress(100.0)
         log(f"MBTilesの生成が完了しました！ 総格納タイル数: {processed}")
+
+    # ---------------------------------------------------------
+    # MBTiles から PMTiles への変換処理
+    # ---------------------------------------------------------
+    def export_pmtiles_from_mbtiles(self, mbtiles_path, pmtiles_path):
+        """
+        生成済みのMBTilesを読み込み、PMTiles v3形式に変換して出力する
+        """
+        self.dlg.label_progress.setText("PMTiles作成中...")
+        self.dlg.progressBar.setValue(0)
+        QCoreApplication.processEvents()
+        
+        try:
+            import pmtiles
+        except ImportError:
+            raise Exception("pmtilesパッケージがインストールされていません。QGISのPython環境で 'pip install pmtiles' を実行してください。")
+            
+        if os.path.exists(pmtiles_path):
+            os.remove(pmtiles_path)
+            
+        log("pmtilesモジュールを使用してPMTilesへ変換しています...")
+        
+        # ユーザー指定の convert_mbtiles を優先し、別名の実装(mbtiles_to_pmtiles)も考慮
+        try:
+            if hasattr(pmtiles, 'convert_mbtiles'):
+                pmtiles.convert_mbtiles(mbtiles_path, pmtiles_path)
+            else:
+                try:
+                    from pmtiles.convert import mbtiles_to_pmtiles
+                    mbtiles_to_pmtiles(mbtiles_path, pmtiles_path)
+                except ImportError:
+                    # 最終手段としてそのまま呼んでエラー内容を自然に表示させる
+                    pmtiles.convert_mbtiles(mbtiles_path, pmtiles_path)
+        except Exception as e:
+            raise Exception(f"PMTilesへの変換処理に失敗しました: {e}")
+                
+        self.dlg.update_progress(100.0)
+        log(f"PMTilesの生成が完了しました！ 出力先: {pmtiles_path}")

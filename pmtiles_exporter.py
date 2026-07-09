@@ -647,11 +647,6 @@ class PMTilesExporter:
       style: {{
         version: 8,
         sources: {{
-          "osm": {{
-            type: "raster",
-            tiles: ["https://a.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png"],
-            tileSize: 256
-          }},
           "pmtiles-source": {{
             type: "raster",
             url: "pmtiles://output.pmtiles",
@@ -660,11 +655,6 @@ class PMTilesExporter:
         }},
         layers: [
           {{
-            id: "osm-layer",
-            type: "raster",
-            source: "osm"
-          }},
-          {{
             id: "pmtiles-layer",
             type: "raster",
             source: "pmtiles-source"
@@ -672,15 +662,7 @@ class PMTilesExporter:
         ]
       }},
       center: [{center_x}, {center_y}],
-      zoom: Math.max({min_zoom}, 10)
-    }});
-    
-    map.on('load', () => {{
-      const bounds = [
-        [{extent_4326.xMinimum()}, {extent_4326.yMinimum()}],
-        [{extent_4326.xMaximum()}, {extent_4326.yMaximum()}]
-      ];
-      map.fitBounds(bounds);
+      zoom: {min_zoom}
     }});
   </script>
 </body>

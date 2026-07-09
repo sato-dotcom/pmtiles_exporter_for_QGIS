@@ -2,36 +2,19 @@
 <ui version="4.0">
  <class>PMTilesExporterDialogBase</class>
  <widget class="QDialog" name="PMTilesExporterDialogBase">
-  <property name="geometry">
-   <rect>
-    <x>0</x>
-    <y>0</y>
-    <width>450</width>
-    <height>660</height>
-   </rect>
-  </property>
   <property name="windowTitle">
-   <string>PMTiles Exporter for QGIS</string>
+   <string>PMTiles Exporter</string>
   </property>
+
   <layout class="QVBoxLayout" name="verticalLayout">
+
+   <!-- 出力範囲選択 -->
    <item>
-    <widget class="QGroupBox" name="groupBox_Layer">
+    <widget class="QGroupBox" name="groupExtent">
      <property name="title">
-      <string>1. レイヤー選択 (レイヤーパネル順)</string>
+      <string>出力範囲</string>
      </property>
-     <layout class="QVBoxLayout" name="verticalLayout_2">
-      <item>
-       <widget class="QWidget" name="layer_tree_container" native="true"/>
-      </item>
-     </layout>
-    </widget>
-   </item>
-   <item>
-    <widget class="QGroupBox" name="groupBox_Extent">
-     <property name="title">
-      <string>2. 出力範囲</string>
-     </property>
-     <layout class="QVBoxLayout" name="verticalLayout_3">
+     <layout class="QHBoxLayout">
       <item>
        <widget class="QRadioButton" name="radCanvas">
         <property name="text">
@@ -45,16 +28,166 @@
       <item>
        <widget class="QRadioButton" name="radLayer">
         <property name="text">
-         <string>レイヤー範囲 (選択したレイヤーの結合範囲)</string>
+         <string>レイヤー結合範囲</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+
+   <!-- CRS選択 -->
+   <item>
+    <widget class="QGroupBox" name="groupCRS">
+     <property name="title">
+      <string>座標系（日本平面直角座標系）</string>
+     </property>
+     <layout class="QHBoxLayout">
+      <item>
+       <widget class="QComboBox" name="cmbCRS"/>
+      </item>
+     </layout>
+    </widget>
+   </item>
+
+   <!-- タイル形式選択 -->
+   <item>
+    <widget class="QGroupBox" name="groupTileFormat">
+     <property name="title">
+      <string>タイル形式</string>
+     </property>
+     <layout class="QHBoxLayout">
+      <item>
+       <widget class="QComboBox" name="cmbTileFormat">
+        <item>
+         <property name="text">
+          <string>XYZタイル</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>MBTiles</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>PMTiles</string>
+         </property>
+        </item>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+
+   <!-- レイヤーツリー -->
+   <item>
+    <widget class="QGroupBox" name="groupLayers">
+     <property name="title">
+      <string>レイヤー選択</string>
+     </property>
+     <layout class="QVBoxLayout">
+      <item>
+       <widget class="QWidget" name="layer_tree_container">
+        <layout class="QVBoxLayout" name="layerTreeLayout"/>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+
+   <!-- ズーム範囲 -->
+   <item>
+    <widget class="QGroupBox" name="groupZoom">
+     <property name="title">
+      <string>ズーム範囲</string>
+     </property>
+     <layout class="QHBoxLayout">
+      <item>
+       <widget class="QLabel" name="labelMinZoom">
+        <property name="text">
+         <string>最小ズーム</string>
         </property>
        </widget>
       </item>
       <item>
-       <widget class="QRadioButton" name="radDraw">
-        <property name="text">
-         <string>手動で矩形を描く (未実装)</string>
+       <widget class="QSpinBox" name="spinMinZoom">
+        <property name="minimum">
+         <number>0</number>
         </property>
-        <property name="enabled">
+        <property name="maximum">
+         <number>22</number>
+        </property>
+        <property name="value">
+         <number>0</number>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="labelMaxZoom">
+        <property name="text">
+         <string>最大ズーム</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QSpinBox" name="spinMaxZoom">
+        <property name="minimum">
+         <number>0</number>
+        </property>
+        <property name="maximum">
+         <number>22</number>
+        </property>
+        <property name="value">
+         <number>5</number>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+
+   <!-- 保存先 -->
+   <item>
+    <widget class="QGroupBox" name="groupOutput">
+     <property name="title">
+      <string>保存先フォルダ</string>
+     </property>
+     <layout class="QHBoxLayout">
+      <item>
+       <widget class="QLineEdit" name="txtOutputPath"/>
+      </item>
+      <item>
+       <widget class="QPushButton" name="btnBrowse">
+        <property name="text">
+         <string>参照</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+
+   <!-- 進捗 -->
+   <item>
+    <widget class="QGroupBox" name="groupProgress">
+     <property name="title">
+      <string>進捗</string>
+     </property>
+     <layout class="QVBoxLayout">
+      <item>
+       <widget class="QLabel" name="label_progress">
+        <property name="text">
+         <string>準備中…</string>
+        </property>
+        <property name="visible">
+         <bool>false</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QProgressBar" name="progressBar">
+        <property name="visible">
          <bool>false</bool>
         </property>
        </widget>
@@ -62,178 +195,19 @@
      </layout>
     </widget>
    </item>
-   <item>
-    <widget class="QGroupBox" name="groupBox_Zoom">
-     <property name="title">
-      <string>3. ズーム設定</string>
-     </property>
-     <layout class="QGridLayout" name="gridLayout">
-      <item row="0" column="0">
-       <widget class="QLabel" name="labelPreset">
-        <property name="text">
-         <string>プリセット:</string>
-        </property>
-       </widget>
-      </item>
-      <item row="0" column="1" colspan="3">
-       <widget class="QComboBox" name="cmbPreset">
-        <item>
-         <property name="text">
-          <string>カスタム</string>
-         </property>
-        </item>
-        <item>
-         <property name="text">
-          <string>測量標準（15–20）</string>
-         </property>
-        </item>
-        <item>
-         <property name="text">
-          <string>詳細確認（17–21）</string>
-         </property>
-        </item>
-        <item>
-         <property name="text">
-          <string>ピンポイント（18–22）</string>
-         </property>
-        </item>
-       </widget>
-      </item>
-      <item row="1" column="0">
-       <widget class="QLabel" name="labelMinZoom">
-        <property name="text">
-         <string>Min zoom:</string>
-        </property>
-       </widget>
-      </item>
-      <item row="1" column="1">
-       <widget class="QSpinBox" name="spinMinZoom">
-        <property name="maximum">
-         <number>22</number>
-        </property>
-        <property name="value">
-         <number>15</number>
-        </property>
-       </widget>
-      </item>
-      <item row="1" column="2">
-       <widget class="QLabel" name="labelMaxZoom">
-        <property name="text">
-         <string>Max zoom:</string>
-        </property>
-       </widget>
-      </item>
-      <item row="1" column="3">
-       <widget class="QSpinBox" name="spinMaxZoom">
-        <property name="maximum">
-         <number>22</number>
-        </property>
-        <property name="value">
-         <number>20</number>
-        </property>
-       </widget>
-      </item>
-     </layout>
-    </widget>
-   </item>
-   <item>
-    <widget class="QGroupBox" name="groupBox_Format">
-     <property name="title">
-      <string>4. 出力形式</string>
-     </property>
-     <layout class="QVBoxLayout" name="verticalLayout_Format">
-      <item>
-       <widget class="QRadioButton" name="radio_xyz">
-        <property name="text">
-         <string>XYZ タイル</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QRadioButton" name="radio_mbtiles">
-        <property name="text">
-         <string>MBTiles</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QRadioButton" name="radio_pmtiles">
-        <property name="text">
-         <string>PMTiles</string>
-        </property>
-        <property name="checked">
-         <bool>true</bool>
-        </property>
-       </widget>
-      </item>
-     </layout>
-    </widget>
-   </item>
-   <item>
-    <widget class="QGroupBox" name="groupBox_Output">
-     <property name="title">
-      <string>5. 保存先</string>
-     </property>
-     <layout class="QHBoxLayout" name="horizontalLayout">
-      <item>
-       <widget class="QLineEdit" name="txtOutputPath"/>
-      </item>
-      <item>
-       <widget class="QPushButton" name="btnCandidates">
-        <property name="text">
-         <string>候補▼</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QPushButton" name="btnBrowse">
-        <property name="text">
-         <string>...</string>
-        </property>
-       </widget>
-      </item>
-     </layout>
-    </widget>
-   </item>
-   <item>
-    <widget class="QLabel" name="label_progress">
-     <property name="text">
-      <string/>
-     </property>
-     <property name="visible">
-      <bool>false</bool>
-     </property>
-    </widget>
-   </item>
-   <item>
-    <widget class="QProgressBar" name="progressBar">
-     <property name="value">
-      <number>0</number>
-     </property>
-     <property name="visible">
-      <bool>false</bool>
-     </property>
-    </widget>
-   </item>
+
+   <!-- OK / Cancel -->
    <item>
     <widget class="QDialogButtonBox" name="buttonBox">
-     <property name="orientation">
-      <enum>Qt::Horizontal</enum>
-     </property>
      <property name="standardButtons">
-      <set>QDialogButtonBox::Cancel|QDialogButtonBox::Ok</set>
+      <set>QDialogButtonBox::Ok|QDialogButtonBox::Cancel</set>
      </property>
     </widget>
    </item>
+
   </layout>
  </widget>
+
  <resources/>
- <connections>
-  <connection>
-   <sender>buttonBox</sender>
-   <signal>rejected()</signal>
-   <receiver>PMTilesExporterDialogBase</receiver>
-   <slot>reject()</slot>
-  </connection>
- </connections>
+ <connections/>
 </ui>

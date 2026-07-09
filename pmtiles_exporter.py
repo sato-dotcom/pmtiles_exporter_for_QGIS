@@ -2,6 +2,7 @@
 import os
 import math
 import time
+import sqlite3
 from pathlib import Path
 
 from qgis.PyQt import QtWidgets
@@ -216,8 +217,19 @@ class PMTilesExporter:
                 QMessageBox.information(self.iface.mainWindow(), "PMTiles Exporter", "XYZタイルの出力が完了しました！")
                 
             elif "MBTiles" in tile_format:
-                QMessageBox.information(self.iface.mainWindow(), "PMTiles Exporter", "MBTiles出力はまだ未実装です。")
-                return False
+                log("MBTiles出力: まずXYZタイルを生成します...")
+                self.export_xyz_tiles(output_folder, extent, extent_crs, min_zoom, max_zoom)
+                
+                mbtiles_path = os.path.join(output_folder, "output.mbtiles")
+                log(f"MBTilesの生成を開始します: {mbtiles_path}")
+                
+                # Bounds計算用 (EPSG:4326)
+                crs_4326 = QgsCoordinateReferenceSystem("EPSG:4326")
+                transform_4326 = QgsCoordinateTransform(extent_crs, crs_4326, QgsProject.instance())
+                extent_4326 = transform_4326.transformBoundingBox(extent)
+                
+                self.export_mbtiles_from_xyz(output_folder, mbtiles_path, min_zoom, max_zoom, extent_4326)
+                QMessageBox.information(self.iface.mainWindow(), "PMTiles Exporter", "MBTilesの出力が完了しました！")
 
             elif "PMTiles" in tile_format:
                 QMessageBox.information(self.iface.mainWindow(), "PMTiles Exporter", "PMTiles出力はまだ未実装です。")
@@ -316,6 +328,7 @@ class PMTilesExporter:
             raise Exception("出力対象のタイルが0件です。ズームレベルや出力範囲の設定を確認してください。")
 
         processed = 0
+        self.dlg.label_progress.setText("XYZタイル作成中...")
 
         # ---------------------------------------------------------
         # タイル生成ループ
@@ -361,7 +374,7 @@ class PMTilesExporter:
                     # UIのフリーズを防ぐ
                     QCoreApplication.processEvents()
 
-        log("画像のレンダリングと保存が完了しました。")
+        log("XYZ画像のレンダリングと保存が完了しました。")
 
         # ---------------------------------------------------------
         # プレビュー用のHTML (Leaflet) を出力
@@ -418,3 +431,114 @@ class PMTilesExporter:
             log("HTMLの生成が完了しました。")
         except Exception as e:
             log(f"HTMLの生成中にエラーが発生しましたが、タイルの出力は完了しています: {e}")
+
+
+    # ---------------------------------------------------------
+    # XYZ から MBTiles への変換処理
+    # ---------------------------------------------------------
+    def export_mbtiles_from_xyz(self, xyz_folder, mbtiles_path, min_zoom, max_zoom, extent_4326):
+        """
+        生成済みのXYZタイルをMBTiles (SQLite) にパックする
+        Y座標はTMS規格に沿って反転して格納する
+        """
+        if os.path.exists(mbtiles_path):
+            os.remove(mbtiles_path)
+            
+        conn = sqlite3.connect(mbtiles_path)
+        cursor = conn.cursor()
+        
+        # テーブルとインデックスの作成
+        cursor.execute("CREATE TABLE metadata (name text, value text);")
+        cursor.execute("CREATE TABLE tiles (zoom_level integer, tile_column integer, tile_row integer, tile_data blob);")
+        cursor.execute("CREATE UNIQUE INDEX tile_index on tiles (zoom_level, tile_column, tile_row);")
+        
+        # メタデータの計算
+        bounds_str = f"{extent_4326.xMinimum()},{extent_4326.yMinimum()},{extent_4326.xMaximum()},{extent_4326.yMaximum()}"
+        center_x = (extent_4326.xMinimum() + extent_4326.xMaximum()) / 2.0
+        center_y = (extent_4326.yMinimum() + extent_4326.yMaximum()) / 2.0
+        center_str = f"{center_x},{center_y},{min_zoom}"
+        
+        metadata = [
+            ("name", "QGIS PMTiles Exporter"),
+            ("type", "overlay"),
+            ("version", "1.1"),
+            ("description", "Exported from QGIS"),
+            ("format", "png"),
+            ("bounds", bounds_str),
+            ("center", center_str),
+            ("minzoom", str(min_zoom)),
+            ("maxzoom", str(max_zoom))
+        ]
+        
+        cursor.executemany("INSERT INTO metadata (name, value) VALUES (?, ?);", metadata)
+        
+        log("XYZタイルを読み込み、MBTilesデータベースに格納しています...")
+        
+        # タイルの総数を取得する
+        tile_count = 0
+        for z in range(min_zoom, max_zoom + 1):
+            z_dir = Path(xyz_folder) / str(z)
+            if not z_dir.exists():
+                continue
+            for x_dir in z_dir.iterdir():
+                if not x_dir.is_dir():
+                    continue
+                tile_count += len(list(x_dir.glob("*.png")))
+                
+        if tile_count == 0:
+            log("格納するタイルが見つかりませんでした。")
+            conn.close()
+            return
+            
+        # UIリセット
+        processed = 0
+        self.dlg.label_progress.setText("MBTiles作成中...")
+        self.dlg.progressBar.setValue(0)
+        QCoreApplication.processEvents()
+
+        # BLOB格納ループ
+        for z in range(min_zoom, max_zoom + 1):
+            z_dir = Path(xyz_folder) / str(z)
+            if not z_dir.exists():
+                continue
+            
+            for x_dir in z_dir.iterdir():
+                if not x_dir.is_dir():
+                    continue
+                
+                try:
+                    x = int(x_dir.name)
+                except ValueError:
+                    continue
+                    
+                for y_file in x_dir.glob("*.png"):
+                    try:
+                        y = int(y_file.stem)
+                    except ValueError:
+                        continue
+                        
+                    # MBTiles仕様 (TMS) に合わせてY座標を反転する
+                    # tms_y = (2^z) - 1 - y
+                    tms_y = (1 << z) - 1 - y
+                    
+                    with open(y_file, "rb") as f:
+                        tile_data = f.read()
+                        
+                    cursor.execute(
+                        "INSERT INTO tiles (zoom_level, tile_column, tile_row, tile_data) VALUES (?, ?, ?, ?);",
+                        (z, x, tms_y, sqlite3.Binary(tile_data))
+                    )
+                    
+                    processed += 1
+                    
+                    # 100ファイルごとにUIを更新する
+                    if processed % 100 == 0:
+                        percent = (processed / tile_count) * 100.0
+                        self.dlg.update_progress(percent)
+                        QCoreApplication.processEvents()
+
+        conn.commit()
+        conn.close()
+        
+        self.dlg.update_progress(100.0)
+        log(f"MBTilesの生成が完了しました！ 総格納タイル数: {processed}")

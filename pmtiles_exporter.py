@@ -3,6 +3,7 @@ import os
 import math
 import time
 import sqlite3
+import shutil
 from pathlib import Path
 
 from qgis.PyQt import QtWidgets
@@ -161,7 +162,7 @@ class PMTilesExporter:
             self.dlg.buttonBox.setEnabled(True)
 
     # ---------------------------------------------------------
-    # タイル出力メイン
+    # タイル出力メインフロー
     # ---------------------------------------------------------
     def export_tiles(self):
         log("export_tiles: 処理を開始します。")
@@ -187,7 +188,6 @@ class PMTilesExporter:
         else:
             log("出力範囲モード: 現在のキャンバス範囲")
             extent = self.iface.mapCanvas().extent()
-            # キャンバスの場合も、データの本来のCRSを優先して取得する。
             layer_crs = self.dlg.get_extent_crs()
             if layer_crs and layer_crs.isValid():
                 extent_crs = layer_crs
@@ -211,9 +211,16 @@ class PMTilesExporter:
         QCoreApplication.processEvents()
 
         try:
+            # Bounds計算用 (EPSG:4326)
+            crs_4326 = QgsCoordinateReferenceSystem("EPSG:4326")
+            transform_4326 = QgsCoordinateTransform(extent_crs, crs_4326, QgsProject.instance())
+            extent_4326 = transform_4326.transformBoundingBox(extent)
+
             if "XYZ" in tile_format:
                 log("XYZタイルの生成を開始します...")
                 self.export_xyz_tiles(output_folder, extent, extent_crs, min_zoom, max_zoom)
+                
+                self.generate_preview_html(output_folder, tile_format, min_zoom, max_zoom, extent_4326)
                 QMessageBox.information(self.iface.mainWindow(), "PMTiles Exporter", "XYZタイルの出力が完了しました！")
                 
             elif "MBTiles" in tile_format:
@@ -222,13 +229,11 @@ class PMTilesExporter:
                 
                 mbtiles_path = os.path.join(output_folder, "output.mbtiles")
                 log(f"MBTilesの生成を開始します: {mbtiles_path}")
-                
-                # Bounds計算用 (EPSG:4326)
-                crs_4326 = QgsCoordinateReferenceSystem("EPSG:4326")
-                transform_4326 = QgsCoordinateTransform(extent_crs, crs_4326, QgsProject.instance())
-                extent_4326 = transform_4326.transformBoundingBox(extent)
-                
                 self.export_mbtiles_from_xyz(output_folder, mbtiles_path, min_zoom, max_zoom, extent_4326)
+                
+                self.generate_preview_html(output_folder, tile_format, min_zoom, max_zoom, extent_4326)
+                self.cleanup_temp_files(output_folder, tile_format)
+                
                 QMessageBox.information(self.iface.mainWindow(), "PMTiles Exporter", "MBTilesの出力が完了しました！")
 
             elif "PMTiles" in tile_format:
@@ -237,18 +242,15 @@ class PMTilesExporter:
                 
                 mbtiles_path = os.path.join(output_folder, "output.mbtiles")
                 log(f"MBTilesの生成を開始します: {mbtiles_path}")
-                
-                # Bounds計算用 (EPSG:4326)
-                crs_4326 = QgsCoordinateReferenceSystem("EPSG:4326")
-                transform_4326 = QgsCoordinateTransform(extent_crs, crs_4326, QgsProject.instance())
-                extent_4326 = transform_4326.transformBoundingBox(extent)
-                
                 self.export_mbtiles_from_xyz(output_folder, mbtiles_path, min_zoom, max_zoom, extent_4326)
 
                 pmtiles_path = os.path.join(output_folder, "output.pmtiles")
                 log(f"PMTilesの生成を開始します: {pmtiles_path}")
-                
                 self.export_pmtiles_from_mbtiles(mbtiles_path, pmtiles_path)
+                
+                self.generate_preview_html(output_folder, tile_format, min_zoom, max_zoom, extent_4326)
+                self.cleanup_temp_files(output_folder, tile_format)
+                
                 QMessageBox.information(self.iface.mainWindow(), "PMTiles Exporter", "PMTilesの出力が完了しました！")
 
             self.dlg.finish_progress()
@@ -269,11 +271,9 @@ class PMTilesExporter:
         """
         XYZタイルを {z}/{x}/{y}.png 形式で出力する
         """
-        # 出力先 CRS（WebMercator）
         dest_crs = QgsCoordinateReferenceSystem("EPSG:3857")
         transform = QgsCoordinateTransform(extent_crs, dest_crs, QgsProject.instance())
 
-        # 範囲をWebMercatorに変換
         try:
             extent_3857 = transform.transformBoundingBox(extent)
             log(f"WebMercator変換後のextent: {extent_3857.toString()}")
@@ -300,22 +300,15 @@ class PMTilesExporter:
             tile_size = WORLD_SIZE / (2 ** z)
             return int((WORLD_MAX - my) / tile_size)
 
-        # ---------------------------------------------------------
-        # レンダリング対象レイヤーの取得
-        # ---------------------------------------------------------
         layers = self.dlg.get_selected_layers()
         if not layers:
-            log("選択されたレイヤーがないため、キャン আমেরバス上の全レイヤーを対象とします。")
+            log("選択されたレイヤーがないため、キャンバス上の全レイヤーを対象とします。")
             layers = [l for l in QgsProject.instance().mapLayers().values()]
         
         log(f"レンダリング対象のレイヤー数: {len(layers)}")
 
-        # ---------------------------------------------------------
-        # 共通のMapSettingsを準備
-        # ---------------------------------------------------------
         ms_base = QgsMapSettings()
         ms_base.setLayers(layers)
-        # 背景を完全に透明に設定 (透過PNGのため)
         ms_base.setBackgroundColor(QColor(Qt.transparent))
         ms_base.setOutputSize(QSize(256, 256))
         ms_base.setDestinationCrs(dest_crs)
@@ -323,9 +316,6 @@ class PMTilesExporter:
         ms_base.setFlag(QgsMapSettings.Antialiasing, True)
         ms_base.setFlag(QgsMapSettings.UseAdvancedEffects, True)
 
-        # ---------------------------------------------------------
-        # タイル総数計算
-        # ---------------------------------------------------------
         total_tiles = 0
         for z in range(min_zoom, max_zoom + 1):
             xmin = max(0, mercator_to_tile_x(extent_3857.xMinimum(), z))
@@ -346,9 +336,6 @@ class PMTilesExporter:
         processed = 0
         self.dlg.label_progress.setText("XYZタイル作成中...")
 
-        # ---------------------------------------------------------
-        # タイル生成ループ
-        # ---------------------------------------------------------
         for z in range(min_zoom, max_zoom + 1):
             xmin = max(0, mercator_to_tile_x(extent_3857.xMinimum(), z))
             xmax = min(2**z - 1, mercator_to_tile_x(extent_3857.xMaximum(), z))
@@ -365,7 +352,6 @@ class PMTilesExporter:
 
                     tile_extent = QgsRectangle(tile_x_min, tile_y_min, tile_x_max, tile_y_max)
 
-                    # ベースの設定をコピーして範囲だけ更新
                     ms = QgsMapSettings(ms_base)
                     ms.setExtent(tile_extent)
 
@@ -375,100 +361,34 @@ class PMTilesExporter:
 
                     img = job.renderedImage()
 
-                    # 保存先ディレクトリ作成
                     tile_dir = Path(output_folder) / str(z) / str(x)
                     tile_dir.mkdir(parents=True, exist_ok=True)
 
-                    # PNG保存（透過）
                     file_path = tile_dir / f"{y}.png"
                     img.save(str(file_path), "PNG")
 
                     processed += 1
                     percent = (processed / total_tiles) * 100.0
                     self.dlg.update_progress(percent)
-                    
-                    # UIのフリーズを防ぐ
                     QCoreApplication.processEvents()
 
         log("XYZ画像のレンダリングと保存が完了しました。")
-
-        # ---------------------------------------------------------
-        # プレビュー用のHTML (Leaflet) を出力
-        # ---------------------------------------------------------
-        log("プレビュー用HTML (index.html) を生成します。")
-        try:
-            crs_4326 = QgsCoordinateReferenceSystem("EPSG:4326")
-            transform_4326 = QgsCoordinateTransform(extent_crs, crs_4326, QgsProject.instance())
-            extent_4326 = transform_4326.transformBoundingBox(extent)
-            
-            html_content = f"""<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>XYZ Tile Preview</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <style>
-    body {{ margin: 0; padding: 0; }}
-    #map {{ width: 100vw; height: 100vh; }}
-  </style>
-</head>
-<body>
-  <div id="map"></div>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script>
-    var map = L.map('map');
-    
-    // 背景地図 (OpenStreetMap)
-    L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-      attribution: '&copy; OpenStreetMap contributors'
-    }}).addTo(map);
-
-    // 出力したXYZタイル
-    L.tileLayer('./{{z}}/{{x}}/{{y}}.png', {{
-      minZoom: {min_zoom},
-      maxZoom: {max_zoom},
-      tms: false
-    }}).addTo(map);
-    
-    // 出力範囲に自動ズーム
-    var bounds = [
-      [{extent_4326.yMinimum()}, {extent_4326.xMinimum()}],
-      [{extent_4326.yMaximum()}, {extent_4326.xMaximum()}]
-    ];
-    map.fitBounds(bounds);
-  </script>
-</body>
-</html>"""
-            
-            html_path = Path(output_folder) / "index.html"
-            with open(html_path, "w", encoding="utf-8") as f:
-                f.write(html_content)
-            log("HTMLの生成が完了しました。")
-        except Exception as e:
-            log(f"HTMLの生成中にエラーが発生しましたが、タイルの出力は完了しています: {e}")
 
 
     # ---------------------------------------------------------
     # XYZ から MBTiles への変換処理
     # ---------------------------------------------------------
     def export_mbtiles_from_xyz(self, xyz_folder, mbtiles_path, min_zoom, max_zoom, extent_4326):
-        """
-        生成済みのXYZタイルをMBTiles (SQLite) にパックする
-        Y座標はTMS規格に沿って反転して格納する
-        """
         if os.path.exists(mbtiles_path):
             os.remove(mbtiles_path)
             
         conn = sqlite3.connect(mbtiles_path)
         cursor = conn.cursor()
         
-        # テーブルとインデックスの作成
         cursor.execute("CREATE TABLE metadata (name text, value text);")
         cursor.execute("CREATE TABLE tiles (zoom_level integer, tile_column integer, tile_row integer, tile_data blob);")
         cursor.execute("CREATE UNIQUE INDEX tile_index on tiles (zoom_level, tile_column, tile_row);")
         
-        # メタデータの計算
         bounds_str = f"{extent_4326.xMinimum()},{extent_4326.yMinimum()},{extent_4326.xMaximum()},{extent_4326.yMaximum()}"
         center_x = (extent_4326.xMinimum() + extent_4326.xMaximum()) / 2.0
         center_y = (extent_4326.yMinimum() + extent_4326.yMaximum()) / 2.0
@@ -490,7 +410,6 @@ class PMTilesExporter:
         
         log("XYZタイルを読み込み、MBTilesデータベースに格納しています...")
         
-        # タイルの総数を取得する
         tile_count = 0
         for z in range(min_zoom, max_zoom + 1):
             z_dir = Path(xyz_folder) / str(z)
@@ -506,13 +425,11 @@ class PMTilesExporter:
             conn.close()
             return
             
-        # UIリセット
         processed = 0
         self.dlg.label_progress.setText("MBTiles作成中...")
         self.dlg.progressBar.setValue(0)
         QCoreApplication.processEvents()
 
-        # BLOB格納ループ
         for z in range(min_zoom, max_zoom + 1):
             z_dir = Path(xyz_folder) / str(z)
             if not z_dir.exists():
@@ -533,8 +450,6 @@ class PMTilesExporter:
                     except ValueError:
                         continue
                         
-                    # MBTiles仕様 (TMS) に合わせてY座標を反転する
-                    # tms_y = (2^z) - 1 - y
                     tms_y = (1 << z) - 1 - y
                     
                     with open(y_file, "rb") as f:
@@ -547,7 +462,6 @@ class PMTilesExporter:
                     
                     processed += 1
                     
-                    # 100ファイルごとにUIを更新する
                     if processed % 100 == 0:
                         percent = (processed / tile_count) * 100.0
                         self.dlg.update_progress(percent)
@@ -563,9 +477,6 @@ class PMTilesExporter:
     # MBTiles から PMTiles への変換処理
     # ---------------------------------------------------------
     def export_pmtiles_from_mbtiles(self, mbtiles_path, pmtiles_path):
-        """
-        生成済みのMBTilesを読み込み、PMTiles v3形式に変換して出力する
-        """
         self.dlg.label_progress.setText("PMTiles作成中...")
         self.dlg.progressBar.setValue(0)
         QCoreApplication.processEvents()
@@ -580,7 +491,6 @@ class PMTilesExporter:
             
         log("pmtilesモジュールを使用してPMTilesへ変換しています...")
         
-        # ユーザー指定の convert_mbtiles を優先し、別名の実装(mbtiles_to_pmtiles)も考慮
         try:
             if hasattr(pmtiles, 'convert_mbtiles'):
                 pmtiles.convert_mbtiles(mbtiles_path, pmtiles_path, {})
@@ -589,10 +499,220 @@ class PMTilesExporter:
                     from pmtiles.convert import mbtiles_to_pmtiles
                     mbtiles_to_pmtiles(mbtiles_path, pmtiles_path, {})
                 except ImportError:
-                    # 最終手段としてそのまま呼んでエラー内容を自然に表示させる
                     pmtiles.convert_mbtiles(mbtiles_path, pmtiles_path, {})
         except Exception as e:
             raise Exception(f"PMTilesへの変換処理に失敗しました: {e}")
                 
         self.dlg.update_progress(100.0)
         log(f"PMTilesの生成が完了しました！ 出力先: {pmtiles_path}")
+
+
+    # ---------------------------------------------------------
+    # プレビュー用 HTML 生成
+    # ---------------------------------------------------------
+    def generate_preview_html(self, output_folder, tile_format, min_zoom, max_zoom, extent_4326):
+        """出力形式に応じた index.html を自動生成する"""
+        log(f"プレビュー用HTML (index.html) を {tile_format} 形式で生成します...")
+        
+        try:
+            center_x = (extent_4326.xMinimum() + extent_4326.xMaximum()) / 2.0
+            center_y = (extent_4326.yMinimum() + extent_4326.yMaximum()) / 2.0
+            
+            html_content = ""
+            
+            if "XYZ" in tile_format:
+                html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>XYZ Tile Preview</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    body {{ margin: 0; padding: 0; }}
+    #map {{ width: 100vw; height: 100vh; }}
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    var map = L.map('map');
+    
+    L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+      attribution: '&copy; OpenStreetMap contributors'
+    }}).addTo(map);
+
+    L.tileLayer('./{{z}}/{{x}}/{{y}}.png', {{
+      minZoom: {min_zoom},
+      maxZoom: {max_zoom},
+      tms: false
+    }}).addTo(map);
+    
+    var bounds = [
+      [{extent_4326.yMinimum()}, {extent_4326.xMinimum()}],
+      [{extent_4326.yMaximum()}, {extent_4326.xMaximum()}]
+    ];
+    map.fitBounds(bounds);
+  </script>
+</body>
+</html>"""
+
+            elif "MBTiles" in tile_format:
+                html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>MBTiles Preview</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="https://unpkg.com/maplibre-gl@3.3.0/dist/maplibre-gl.js"></script>
+  <link href="https://unpkg.com/maplibre-gl@3.3.0/dist/maplibre-gl.css" rel="stylesheet" />
+  <style>
+    body {{ margin: 0; padding: 0; }}
+    #map {{ width: 100vw; height: 100vh; }}
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script>
+    const map = new maplibregl.Map({{
+      container: "map",
+      style: {{
+        version: 8,
+        sources: {{
+          "osm": {{
+            type: "raster",
+            tiles: ["https://a.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png"],
+            tileSize: 256
+          }},
+          "mbtiles-source": {{
+            type: "raster",
+            // Note: MBTiles usually requires a tile server backend (e.g. TileServer GL).
+            // This is a placeholder endpoint representing typical usage.
+            tiles: ["http://localhost:8080/tiles/{{z}}/{{x}}/{{y}}.png"],
+            tileSize: 256
+          }}
+        }},
+        layers: [
+          {{
+            id: "osm-layer",
+            type: "raster",
+            source: "osm"
+          }},
+          {{
+            id: "mbtiles-layer",
+            type: "raster",
+            source: "mbtiles-source"
+          }}
+        ]
+      }},
+      center: [{center_x}, {center_y}],
+      zoom: Math.max({min_zoom}, 10)
+    }});
+    
+    map.on('load', () => {{
+      const bounds = [
+        [{extent_4326.xMinimum()}, {extent_4326.yMinimum()}],
+        [{extent_4326.xMaximum()}, {extent_4326.yMaximum()}]
+      ];
+      map.fitBounds(bounds);
+    }});
+  </script>
+</body>
+</html>"""
+
+            elif "PMTiles" in tile_format:
+                html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>PMTiles Preview</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="https://unpkg.com/pmtiles@3.0.0/dist/pmtiles.js"></script>
+  <script src="https://unpkg.com/maplibre-gl@3.3.0/dist/maplibre-gl.js"></script>
+  <link href="https://unpkg.com/maplibre-gl@3.3.0/dist/maplibre-gl.css" rel="stylesheet" />
+  <style>
+    body {{ margin: 0; padding: 0; }}
+    #map {{ width: 100vw; height: 100vh; }}
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script>
+    const source = new pmtiles.PMTiles("output.pmtiles");
+    pmtiles.addProtocol(maplibregl, source);
+
+    const map = new maplibregl.Map({{
+      container: "map",
+      style: {{
+        version: 8,
+        sources: {{
+          "osm": {{
+            type: "raster",
+            tiles: ["https://a.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png"],
+            tileSize: 256
+          }},
+          "pmtiles-source": {{
+            type: "raster",
+            url: "pmtiles://output.pmtiles",
+            tileSize: 256
+          }}
+        }},
+        layers: [
+          {{
+            id: "osm-layer",
+            type: "raster",
+            source: "osm"
+          }},
+          {{
+            id: "pmtiles-layer",
+            type: "raster",
+            source: "pmtiles-source"
+          }}
+        ]
+      }},
+      center: [{center_x}, {center_y}],
+      zoom: Math.max({min_zoom}, 10)
+    }});
+    
+    map.on('load', () => {{
+      const bounds = [
+        [{extent_4326.xMinimum()}, {extent_4326.yMinimum()}],
+        [{extent_4326.xMaximum()}, {extent_4326.yMaximum()}]
+      ];
+      map.fitBounds(bounds);
+    }});
+  </script>
+</body>
+</html>"""
+
+            if html_content:
+                html_path = Path(output_folder) / "index.html"
+                with open(html_path, "w", encoding="utf-8") as f:
+                    f.write(html_content)
+                log("HTMLの生成が完了しました。")
+                
+        except Exception as e:
+            log(f"HTMLの生成中にエラーが発生しました: {e}")
+
+    # ---------------------------------------------------------
+    # 中間ファイルのクリーンアップ
+    # ---------------------------------------------------------
+    def cleanup_temp_files(self, output_folder, tile_format):
+        """コンテナ形式(MBTiles/PMTiles)作成後、不要な中間ファイル(XYZフォルダ等)を削除する"""
+        log("不要な中間ファイルのクリーンアップを実行します...")
+        try:
+            # XYZフォルダ (名前が数字のみのディレクトリ) を探して削除
+            for item in Path(output_folder).iterdir():
+                if item.is_dir() and item.name.isdigit():
+                    shutil.rmtree(item)
+                    
+            # PMTiles出力の場合は中間生成物の output.mbtiles も削除する
+            if "PMTiles" in tile_format:
+                mbtiles_path = Path(output_folder) / "output.mbtiles"
+                if mbtiles_path.exists():
+                    mbtiles_path.unlink()
+                    
+            log("中間ファイルのクリーンアップが完了しました。")
+        except Exception as e:
+            log(f"中間ファイルのクリーンアップ中にエラーが発生しました: {e}")

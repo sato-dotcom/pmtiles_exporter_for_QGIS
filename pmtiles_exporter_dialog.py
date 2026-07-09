@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 
 import os
-import time
 from pathlib import Path
 
 from qgis.PyQt import uic
@@ -38,6 +37,7 @@ class PMTilesExporterDialog(QtWidgets.QDialog, FORM_CLASS):
 
         layout = QVBoxLayout(self.layer_tree_container)
         layout.addWidget(self.layerTreeView)
+        layout.setContentsMargins(0, 0, 0, 0) # マージンを詰める
 
         # ---------------------------
         # 2. CRS選択コンボボックスの初期化
@@ -61,9 +61,15 @@ class PMTilesExporterDialog(QtWidgets.QDialog, FORM_CLASS):
         self.load_settings()
 
         # ---------------------------
-        # 6. OK / Cancel ボタンのシグナル接続（★ここを追記しました）
+        # 6. OK / Cancel ボタンのシグナル接続
         # ---------------------------
-        self.buttonBox.accepted.connect(self.accept)
+        # OKボタン（accepted）はメイン処理側で制御するため、ここで勝手に閉じないように切断する
+        try:
+            self.buttonBox.accepted.disconnect()
+        except Exception:
+            pass
+        
+        # Cancelボタンはそのまま閉じてよい
         self.buttonBox.rejected.connect(self.reject)
 
     # ---------------------------------------------------------
@@ -96,7 +102,7 @@ class PMTilesExporterDialog(QtWidgets.QDialog, FORM_CLASS):
         for label, epsg in crs_list:
             self.cmbCRS.addItem(label, epsg)
 
-        self.cmbCRS.setCurrentIndex(2)  # 3系
+        self.cmbCRS.setCurrentIndex(2)  # デフォルト: 3系
 
     # ---------------------------------------------------------
     # 保存先フォルダ選択
@@ -138,11 +144,12 @@ class PMTilesExporterDialog(QtWidgets.QDialog, FORM_CLASS):
     # 結合範囲の CRS（最初のレイヤーの CRS）
     # ---------------------------------------------------------
     def get_extent_crs(self):
+        # まず選択されているレイヤーのCRSを優先して取得
         layers = self.get_selected_layers()
         if layers:
             return layers[0].crs()
 
-        # フォールバック
+        # 取れなければコンボボックスのフォールバック値を使用
         epsg = self.cmbCRS.currentData()
         return QgsCoordinateReferenceSystem(f"EPSG:{epsg}")
 

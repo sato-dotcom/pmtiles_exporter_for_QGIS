@@ -31,10 +31,18 @@ from qgis.core import (
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
     QgsMapSettings,
-    QgsMapRendererParallelJob
+    QgsMapRendererParallelJob,
+    QgsMessageLog,
+    Qgis
 )
 
 from .pmtiles_exporter_dialog import PMTilesExporterDialog
+
+
+def log(msg):
+    """QGISのログパネルとコンソールにメッセージを出力する"""
+    print(f"[PMTiles Exporter] {msg}")
+    QgsMessageLog.logMessage(str(msg), "PMTiles Exporter", Qgis.Info)
 
 
 class PMTilesExporter:
@@ -127,83 +135,125 @@ class PMTilesExporter:
     def run(self):
         if self.dlg is None:
             self.dlg = PMTilesExporterDialog(self.iface.mainWindow())
+            # ダイアログのOKボタンが押された時の処理を紐付け
+            self.dlg.buttonBox.accepted.connect(self.start_export)
 
         self.dlg.load_settings()
-
-        result = self.dlg.exec_()
-        if result == QtWidgets.QDialog.Accepted:
-            self.dlg.save_settings()
-            self.export_tiles()
+        
+        # モーダルとして実行せず、show() で開いたままにして進捗を見せる
+        self.dlg.show()
+        
+    def start_export(self):
+        """ダイアログのOKボタンが押された時の処理"""
+        self.dlg.save_settings()
+        
+        # ボタンを無効化して連打を防ぐ
+        self.dlg.buttonBox.setEnabled(False)
+        
+        try:
+            success = self.export_tiles()
+            if success:
+                # 成功したらダイアログを閉じる
+                self.dlg.accept()
+        finally:
+            # 処理が終わったらボタンを有効に戻す
+            self.dlg.buttonBox.setEnabled(True)
 
     # ---------------------------------------------------------
     # タイル出力メイン
     # ---------------------------------------------------------
     def export_tiles(self):
+        log("export_tiles: 処理を開始します。")
         output_folder = self.dlg.txtOutputPath.text().strip()
         if not output_folder:
-            QMessageBox.warning(self.iface.mainWindow(), "PMTiles Exporter",
-                                "保存先フォルダを指定してください。")
-            return
+            QMessageBox.warning(self.iface.mainWindow(), "PMTiles Exporter", "保存先フォルダを指定してください。")
+            return False
 
         Path(output_folder).mkdir(parents=True, exist_ok=True)
+        log(f"保存先フォルダ: {output_folder}")
 
-        # 出力範囲
+        # 出力範囲とCRSの決定
+        extent = None
+        extent_crs = None
+
         if self.dlg.radLayer.isChecked():
+            log("出力範囲モード: レイヤー結合範囲")
             extent = self.dlg.get_union_extent()
             if extent is None:
-                QMessageBox.warning(self.iface.mainWindow(), "PMTiles Exporter",
-                                    "レイヤー結合範囲が取得できませんでした。")
-                return
+                QMessageBox.warning(self.iface.mainWindow(), "PMTiles Exporter", "表示されているレイヤーがありません。")
+                return False
             extent_crs = self.dlg.get_extent_crs()
         else:
+            log("出力範囲モード: 現在のキャンバス範囲")
             extent = self.iface.mapCanvas().extent()
-            extent_crs = self.iface.mapCanvas().mapSettings().destinationCrs()
+            # キャンバスの場合も、データの本来のCRSを優先して取得する。
+            layer_crs = self.dlg.get_extent_crs()
+            if layer_crs and layer_crs.isValid():
+                extent_crs = layer_crs
+            else:
+                extent_crs = self.iface.mapCanvas().mapSettings().destinationCrs()
+
+        log(f"元extent: {extent.toString()}")
+        log(f"元CRS: {extent_crs.authid()}")
 
         # ズーム
         min_zoom = self.dlg.spinMinZoom.value()
         max_zoom = self.dlg.spinMaxZoom.value()
+        log(f"ズームレベル: {min_zoom} から {max_zoom}")
 
         # タイル形式
         tile_format = self.dlg.cmbTileFormat.currentText()
+        log(f"選択されたタイル形式: {tile_format}")
 
-        # 進捗
+        # 進捗UI初期化
         self.dlg.init_progress()
+        QCoreApplication.processEvents()
 
         try:
             if "XYZ" in tile_format:
+                log("XYZタイルの生成を開始します...")
                 self.export_xyz_tiles(output_folder, extent, extent_crs, min_zoom, max_zoom)
-
+                QMessageBox.information(self.iface.mainWindow(), "PMTiles Exporter", "XYZタイルの出力が完了しました！")
+                
             elif "MBTiles" in tile_format:
-                QMessageBox.information(self.iface.mainWindow(), "PMTiles Exporter",
-                                        "MBTiles出力はまだ未実装です。")
+                QMessageBox.information(self.iface.mainWindow(), "PMTiles Exporter", "MBTiles出力はまだ未実装です。")
+                return False
 
             elif "PMTiles" in tile_format:
-                QMessageBox.information(self.iface.mainWindow(), "PMTiles Exporter",
-                                        "PMTiles出力はまだ未実装です.")
+                QMessageBox.information(self.iface.mainWindow(), "PMTiles Exporter", "PMTiles出力はまだ未実装です。")
+                return False
 
             self.dlg.finish_progress()
+            log("エクスポート処理が正常に完了しました。")
+            return True
 
         except Exception as e:
-            QMessageBox.critical(self.iface.mainWindow(), "PMTiles Exporter",
-                                 f"タイル出力中にエラーが発生しました:\n{e}")
+            log(f"エラー発生: {e}")
+            import traceback
+            log(traceback.format_exc())
+            QMessageBox.critical(self.iface.mainWindow(), "PMTiles Exporter", f"タイル出力中にエラーが発生しました:\n{e}")
+            return False
 
     # ---------------------------------------------------------
-    # XYZタイル出力（CRS自動判定版）
+    # XYZタイル出力（CRS自動判定・透過PNG版）
     # ---------------------------------------------------------
     def export_xyz_tiles(self, output_folder, extent, extent_crs, min_zoom, max_zoom):
         """
         XYZタイルを {z}/{x}/{y}.png 形式で出力する
         """
-
         # 出力先 CRS（WebMercator）
         dest_crs = QgsCoordinateReferenceSystem("EPSG:3857")
         transform = QgsCoordinateTransform(extent_crs, dest_crs, QgsProject.instance())
 
         # 範囲をWebMercatorに変換
-        extent_3857 = transform.transformBoundingBox(extent)
+        try:
+            extent_3857 = transform.transformBoundingBox(extent)
+            log(f"WebMercator変換後のextent: {extent_3857.toString()}")
+        except Exception as e:
+            raise Exception(f"範囲の座標変換に失敗しました: {e}")
 
-        WORLD_MIN = -20037508.34
-        WORLD_MAX = 20037508.34
+        WORLD_MIN = -20037508.342789244
+        WORLD_MAX = 20037508.342789244
         WORLD_SIZE = WORLD_MAX - WORLD_MIN
 
         def x_to_mercator(x, z):
@@ -222,23 +272,59 @@ class PMTilesExporter:
             tile_size = WORLD_SIZE / (2 ** z)
             return int((WORLD_MAX - my) / tile_size)
 
+        # ---------------------------------------------------------
+        # レンダリング対象レイヤーの取得
+        # ---------------------------------------------------------
+        layers = self.dlg.get_selected_layers()
+        if not layers:
+            log("選択されたレイヤーがないため、キャンバス上の全レイヤーを対象とします。")
+            layers = [l for l in QgsProject.instance().mapLayers().values()]
+        
+        log(f"レンダリング対象のレイヤー数: {len(layers)}")
+
+        # ---------------------------------------------------------
+        # 共通のMapSettingsを準備
+        # ---------------------------------------------------------
+        ms_base = QgsMapSettings()
+        ms_base.setLayers(layers)
+        # 背景を完全に透明に設定 (透過PNGのため)
+        ms_base.setBackgroundColor(QColor(Qt.transparent))
+        ms_base.setOutputSize(QSize(256, 256))
+        ms_base.setDestinationCrs(dest_crs)
+        ms_base.setFlag(QgsMapSettings.DrawLabeling, True)
+        ms_base.setFlag(QgsMapSettings.Antialiasing, True)
+        ms_base.setFlag(QgsMapSettings.UseAdvancedEffects, True)
+
+        # ---------------------------------------------------------
         # タイル総数計算
+        # ---------------------------------------------------------
         total_tiles = 0
         for z in range(min_zoom, max_zoom + 1):
-            xmin = mercator_to_tile_x(extent_3857.xMinimum(), z)
-            xmax = mercator_to_tile_x(extent_3857.xMaximum(), z)
-            ymin = mercator_to_tile_y(extent_3857.yMaximum(), z)
-            ymax = mercator_to_tile_y(extent_3857.yMinimum(), z)
+            xmin = max(0, mercator_to_tile_x(extent_3857.xMinimum(), z))
+            xmax = min(2**z - 1, mercator_to_tile_x(extent_3857.xMaximum(), z))
+            ymin = max(0, mercator_to_tile_y(extent_3857.yMaximum(), z))
+            ymax = min(2**z - 1, mercator_to_tile_y(extent_3857.yMinimum(), z))
+            
+            if xmin > xmax or ymin > ymax:
+                continue
+                
             total_tiles += (xmax - xmin + 1) * (ymax - ymin + 1)
+
+        log(f"出力予定の総タイル数: {total_tiles}")
+
+        if total_tiles == 0:
+            raise Exception("出力対象のタイルが0件です。ズームレベルや出力範囲の設定を確認してください。")
 
         processed = 0
 
+        # ---------------------------------------------------------
         # タイル生成ループ
+        # ---------------------------------------------------------
         for z in range(min_zoom, max_zoom + 1):
-            xmin = mercator_to_tile_x(extent_3857.xMinimum(), z)
-            xmax = mercator_to_tile_x(extent_3857.xMaximum(), z)
-            ymin = mercator_to_tile_y(extent_3857.yMaximum(), z)
-            ymax = mercator_to_tile_y(extent_3857.yMinimum(), z)
+            xmin = max(0, mercator_to_tile_x(extent_3857.xMinimum(), z))
+            xmax = min(2**z - 1, mercator_to_tile_x(extent_3857.xMaximum(), z))
+            ymin = max(0, mercator_to_tile_y(extent_3857.yMaximum(), z))
+            ymax = min(2**z - 1, mercator_to_tile_y(extent_3857.yMinimum(), z))
 
             for x in range(xmin, xmax + 1):
                 for y in range(ymin, ymax + 1):
@@ -250,12 +336,9 @@ class PMTilesExporter:
 
                     tile_extent = QgsRectangle(tile_x_min, tile_y_min, tile_x_max, tile_y_max)
 
-                    ms = QgsMapSettings()
-                    ms.setLayers([l for l in QgsProject.instance().mapLayers().values()])
-                    ms.setBackgroundColor(QColor(255, 255, 255, 0))
+                    # ベースの設定をコピーして範囲だけ更新
+                    ms = QgsMapSettings(ms_base)
                     ms.setExtent(tile_extent)
-                    ms.setOutputSize(QSize(256, 256))
-                    ms.setDestinationCrs(dest_crs)
 
                     job = QgsMapRendererParallelJob(ms)
                     job.start()
@@ -263,23 +346,28 @@ class PMTilesExporter:
 
                     img = job.renderedImage()
 
-                    tile_path = Path(output_folder) / str(z) / str(x)
-                    tile_path.mkdir(parents=True, exist_ok=True)
+                    # 保存先ディレクトリ作成
+                    tile_dir = Path(output_folder) / str(z) / str(x)
+                    tile_dir.mkdir(parents=True, exist_ok=True)
 
-                    img.save(str(tile_path / f"{y}.png"), "PNG")
+                    # PNG保存（透過）
+                    file_path = tile_dir / f"{y}.png"
+                    img.save(str(file_path), "PNG")
 
                     processed += 1
                     percent = (processed / total_tiles) * 100.0
                     self.dlg.update_progress(percent)
                     
-                    # ★ここを追記しました：UIのフリーズを防ぎます
+                    # UIのフリーズを防ぐ
                     QCoreApplication.processEvents()
 
+        log("画像のレンダリングと保存が完了しました。")
+
         # ---------------------------------------------------------
-        # タイル出力完了後、プレビュー用のHTML (Leaflet) を出力
+        # プレビュー用のHTML (Leaflet) を出力
         # ---------------------------------------------------------
+        log("プレビュー用HTML (index.html) を生成します。")
         try:
-            # Leafletで読み込みやすいように、中心座標(緯度経度: EPSG4326)を計算する
             crs_4326 = QgsCoordinateReferenceSystem("EPSG:4326")
             transform_4326 = QgsCoordinateTransform(extent_crs, crs_4326, QgsProject.instance())
             extent_4326 = transform_4326.transformBoundingBox(extent)
@@ -327,6 +415,6 @@ class PMTilesExporter:
             html_path = Path(output_folder) / "index.html"
             with open(html_path, "w", encoding="utf-8") as f:
                 f.write(html_content)
+            log("HTMLの生成が完了しました。")
         except Exception as e:
-            # HTML生成のエラーはメインの処理を止めないよう無視する
-            pass
+            log(f"HTMLの生成中にエラーが発生しましたが、タイルの出力は完了しています: {e}")

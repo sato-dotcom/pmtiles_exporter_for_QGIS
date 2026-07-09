@@ -248,7 +248,7 @@ class PMTilesExporter:
                 pmtiles_path = os.path.join(output_folder, "output.pmtiles")
                 log(f"PMTilesの生成を開始します: {pmtiles_path}")
                 
-                self.export_pmtiles_from_mbtiles(mbtiles_path, pmtiles_path, min_zoom, max_zoom)
+                self.export_pmtiles_from_mbtiles(mbtiles_path, pmtiles_path)
                 QMessageBox.information(self.iface.mainWindow(), "PMTiles Exporter", "PMTilesの出力が完了しました！")
 
             self.dlg.finish_progress()
@@ -305,7 +305,7 @@ class PMTilesExporter:
         # ---------------------------------------------------------
         layers = self.dlg.get_selected_layers()
         if not layers:
-            log("選択されたレイヤーがないため、キャンバス上の全レイヤーを対象とします。")
+            log("選択されたレイヤーがないため、キャン আমেরバス上の全レイヤーを対象とします。")
             layers = [l for l in QgsProject.instance().mapLayers().values()]
         
         log(f"レンダリング対象のレイヤー数: {len(layers)}")
@@ -562,7 +562,7 @@ class PMTilesExporter:
     # ---------------------------------------------------------
     # MBTiles から PMTiles への変換処理
     # ---------------------------------------------------------
-    def export_pmtiles_from_mbtiles(self, mbtiles_path, pmtiles_path, min_zoom, max_zoom):
+    def export_pmtiles_from_mbtiles(self, mbtiles_path, pmtiles_path):
         """
         生成済みのMBTilesを読み込み、PMTiles v3形式に変換して出力する
         """
@@ -583,14 +583,14 @@ class PMTilesExporter:
         # ユーザー指定の convert_mbtiles を優先し、別名の実装(mbtiles_to_pmtiles)も考慮
         try:
             if hasattr(pmtiles, 'convert_mbtiles'):
-                pmtiles.convert_mbtiles(mbtiles_path, pmtiles_path, min_zoom, max_zoom)
+                pmtiles.convert_mbtiles(mbtiles_path, pmtiles_path, {})
             else:
                 try:
                     from pmtiles.convert import mbtiles_to_pmtiles
-                    mbtiles_to_pmtiles(mbtiles_path, pmtiles_path, min_zoom, max_zoom)
+                    mbtiles_to_pmtiles(mbtiles_path, pmtiles_path, {})
                 except ImportError:
                     # 最終手段としてそのまま呼んでエラー内容を自然に表示させる
-                    pmtiles.convert_mbtiles(mbtiles_path, pmtiles_path, min_zoom, max_zoom)
+                    pmtiles.convert_mbtiles(mbtiles_path, pmtiles_path, {})
         except Exception as e:
             raise Exception(f"PMTilesへの変換処理に失敗しました: {e}")
                 

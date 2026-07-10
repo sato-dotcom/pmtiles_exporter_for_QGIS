@@ -644,13 +644,9 @@ class PMTilesExporter:
   <script>
     const pmtilesUrl = "output.pmtiles";
 
-    // PMTilesソースを作成
     const source = new pmtiles.PMTiles(pmtilesUrl);
-
-    // MapLibreに PMTiles プロトコルを登録（必須）
     pmtiles.addProtocol(maplibregl, source);
 
-    // 地図を作成
     const map = new maplibregl.Map({{
       container: "map",
       style: {{
@@ -678,8 +674,7 @@ class PMTilesExporter:
 </html>""".format(
                     center_x=center_x,
                     center_y=center_y,
-                    min_zoom=min_zoom,
-                    max_zoom=max_zoom
+                    min_zoom=min_zoom
                 )
 
             if html_content:

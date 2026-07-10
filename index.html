@@ -20,13 +20,9 @@
   <script>
     const pmtilesUrl = "output.pmtiles";
 
-    // PMTilesソースを作成
     const source = new pmtiles.PMTiles(pmtilesUrl);
-
-    // MapLibreに PMTiles プロトコルを登録（必須）
     pmtiles.addProtocol(maplibregl, source);
 
-    // 地図を作成
     const map = new maplibregl.Map({
       container: "map",
       style: {

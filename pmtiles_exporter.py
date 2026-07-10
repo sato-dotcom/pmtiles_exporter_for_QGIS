@@ -658,7 +658,7 @@ class PMTilesExporter:
         sources: {{
           "pmtiles-source": {{
             type: "raster",
-            url: `pmtiles://${{pmtilesUrl}}`,
+            url: "pmtiles://output.pmtiles",
             tileSize: 256
           }}
         }},

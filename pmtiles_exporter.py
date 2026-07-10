@@ -625,23 +625,32 @@ class PMTilesExporter:
                 html_content = f"""<!DOCTYPE html>
 <html>
 <head>
-  <meta charset="utf-8">
-  <title>PMTiles Preview</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <script src="https://unpkg.com/pmtiles@3.0.0/dist/pmtiles.js"></script>
-  <script src="https://unpkg.com/maplibre-gl@3.3.0/dist/maplibre-gl.js"></script>
+  <meta charset="utf-8" />
+  <title>PMTiles Viewer</title>
+
   <link href="https://unpkg.com/maplibre-gl@3.3.0/dist/maplibre-gl.css" rel="stylesheet" />
+  <script src="https://unpkg.com/maplibre-gl@3.3.0/dist/maplibre-gl.js"></script>
+  <script src="https://unpkg.com/pmtiles@3.0.0/dist/pmtiles.js"></script>
+
   <style>
-    body {{ margin: 0; padding: 0; }}
-    #map {{ width: 100vw; height: 100vh; }}
+    body, html {{ margin:0; padding:0; height:100%; }}
+    #map {{ width:100%; height:100%; }}
   </style>
 </head>
+
 <body>
   <div id="map"></div>
+
   <script>
-    const source = new pmtiles.PMTiles("output.pmtiles");
+    const pmtilesUrl = "output.pmtiles";
+
+    // PMTilesソースを作成
+    const source = new pmtiles.PMTiles(pmtilesUrl);
+
+    // MapLibreに PMTiles プロトコルを登録（必須）
     pmtiles.addProtocol(maplibregl, source);
 
+    // 地図を作成
     const map = new maplibregl.Map({{
       container: "map",
       style: {{
@@ -649,7 +658,7 @@ class PMTilesExporter:
         sources: {{
           "pmtiles-source": {{
             type: "raster",
-            url: "pmtiles://output.pmtiles",
+            url: `pmtiles://${{pmtilesUrl}}`,
             tileSize: 256
           }}
         }},

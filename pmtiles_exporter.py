@@ -622,7 +622,7 @@ class PMTilesExporter:
 </html>"""
 
             elif "PMTiles" in tile_format:
-                html_content = f"""<!DOCTYPE html>
+                html_content = """<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8" />
@@ -675,7 +675,12 @@ class PMTilesExporter:
     }});
   </script>
 </body>
-</html>"""
+</html>""".format(
+                    center_x=center_x,
+                    center_y=center_y,
+                    min_zoom=min_zoom,
+                    max_zoom=max_zoom
+                )
 
             if html_content:
                 html_path = Path(output_folder) / "index.html"

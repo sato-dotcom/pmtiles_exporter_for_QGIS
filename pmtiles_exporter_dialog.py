@@ -6,16 +6,13 @@ from pathlib import Path
 from qgis.PyQt import uic
 from qgis.PyQt import QtWidgets
 from qgis.PyQt.QtCore import Qt, QSettings
-from qgis.PyQt.QtWidgets import QFileDialog, QVBoxLayout
+from qgis.PyQt.QtWidgets import QFileDialog, QVBoxLayout, QLabel
 
 from qgis.core import (
     QgsProject,
     QgsCoordinateReferenceSystem,
-    QgsLayerTreeModel,
     QgsRectangle
 )
-from qgis.gui import QgsLayerTreeView
-
 
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
     os.path.dirname(__file__), 'pmtiles_exporter_dialog_base.ui'))
@@ -29,14 +26,13 @@ class PMTilesExporterDialog(QtWidgets.QDialog, FORM_CLASS):
         self.setupUi(self)
 
         # ---------------------------
-        # 1. レイヤーツリーの埋め込み
+        # 1. レイヤーツリーの代わりに説明文を埋め込み
         # ---------------------------
-        self.layerTreeView = QgsLayerTreeView()
-        self.layerTreeModel = QgsLayerTreeModel(QgsProject.instance().layerTreeRoot())
-        self.layerTreeView.setModel(self.layerTreeModel)
+        label = QLabel("QGIS マップキャンバスに表示されているレイヤーをそのまま出力します。")
+        label.setWordWrap(True)
 
         layout = QVBoxLayout(self.layer_tree_container)
-        layout.addWidget(self.layerTreeView)
+        layout.addWidget(label)
         layout.setContentsMargins(0, 0, 0, 0) # マージンを詰める
 
         # ---------------------------

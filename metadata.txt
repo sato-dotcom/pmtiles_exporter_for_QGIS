@@ -1,47 +1,15 @@
-# This file contains metadata for your plugin.
-
-# This file should be included when you package your plugin.# Mandatory items:
-
 [general]
 name=PMTiles Exporter for QGIS
-qgisMinimumVersion=3.0
-description=Export selected layers as PMTiles with preserved rendering.
-version=0.1
-author=TJL
+qgisMinimumVersion=3.22
+description=QGIS の表示中レイヤを PNG および PMTiles として出力するプラグインです。日本の平面直角座標系（EPSG:6671〜6689）を前提としており、国内向け測量業務での利用を目的としています。
+version=1.0.0
+author=佐藤 彰倫（株式会社TJL）
 email=sato@taguma.co.jp
-
-about=Provide a brief description of the plugin and its purpose.
-
-tracker=http://bugs
-repository=http://repo
-# End of mandatory metadata
-
-# Recommended items:
-
-hasProcessingProvider=no
-# Uncomment the following line and add your changelog:
-# changelog=
-
-# Tags are comma separated with spaces allowed
-tags=python
-
-homepage=http://homepage
-category=Plugins
-icon=icon.png
-# experimental flag
+about=本プラグインは、山岳版測量支援アプリ「やまばと」で利用するタイルデータの作成を目的として開発されています。QGIS のキャンバスに表示されているレイヤを合成し、PNG および PMTiles として出力します。日本国内専用のプラグインです。
+category=Raster
+tags=PMTiles,PNG,測量,やまばと,日本,平面直角座標系,EPSG6671-6689
+homepage=https://github.com/sato-dotcom/pmtiles_exporter_for_QGIS
+tracker=https://github.com/sato-dotcom/pmtiles_exporter_for_QGIS/issues
+repository=https://github.com/sato-dotcom/pmtiles_exporter_for_QGIS
 experimental=False
-
-# deprecated flag (applies to the whole plugin, not just a single version)
 deprecated=False
-
-# Since QGIS 3.8, a comma separated list of plugins to be installed
-# (or upgraded) can be specified.
-# Check the documentation for more information.
-# plugin_dependencies=
-
-Category of the plugin: Raster, Vector, Database or Web
-# category=
-
-# If the plugin can run on QGIS Server.
-server=False
-

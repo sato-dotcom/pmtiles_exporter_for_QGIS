@@ -98,61 +98,44 @@ QGIS マップキャンバスに表示されているレイヤーをそのまま
 
 ## 📁 プラグイン構成（ファイル一覧）
 
-PMTiles Exporter for QGIS は以下の構成で動作しています。
+PMTiles Exporter for QGIS は、以下の構成で動作します。
 
 pmtiles_exporter_for_QGIS/
-├── __init__.py
-│   └─ QGIS にプラグインを登録するためのエントリポイント。
-│      classFactory() から PMTilesExporter を読み込みます。
-│
-├── metadata.txt
-│   └─ プラグインのメタ情報（名前・作者・カテゴリ・タグなど）。
-│
-├── pmtiles_exporter.py
-│   └─ プラグイン本体。
-│      - QGIS メニュー/ツールバーへの登録
-│      - ダイアログ起動
-│      - PNG 出力処理（PMTiles 出力の前段階）
-│      - レイヤ合成処理（QgsMapRendererCustomPainterJob）
-│
-├── pmtiles_exporter_dialog.py
-│   └─ UI ロジック（PyQt）。
-│      - レイヤツリーの埋め込み
-│      - 出力範囲選択（キャンバス / レイヤ結合）
-│      - ズームプリセット連動
-│      - ファイル名候補生成
-│      - QSettings による設定保存
-│
-├── pmtiles_exporter_dialog_base.ui
-│   └─ Qt Designer で作成した UI 定義。
-│      - レイヤ選択
-│      - 出力範囲
-│      - ズーム設定
-│      - 保存先選択
-│
-├── resources.qrc
-│   └─ アイコン（icon.png）を含む Qt リソース定義。
-│
-├── resources.py
-│   └─ resources.qrc を Python に変換したもの。
-│
-├── icon.png
-│   └─ QGIS のツールバーに表示される 32px アイコン。
-│
-├── README.md
-│   └─ プラグインの説明書（本ファイル）。
-│
-├── README.html / README.txt
-│   └─ 自動生成された README の別形式（GitHub 用ではない）。
-│
-├── pb_tool.cfg
-│   └─ Plugin Builder 用の設定ファイル。
-│
-├── plugin_upload.py
-│   └─ QGIS 公式リポジトリへアップロードするためのスクリプト。
-│
-└── test/
-    └─ テスト用ディレクトリ（空）
+├── __init__.py  
+│   └─ QGIS にプラグインを登録するためのエントリポイント  
+│      classFactory() から PMTilesExporter を読み込みます  
+├── metadata.txt  
+│   └─ プラグインのメタ情報（名前・作者・カテゴリ・タグなど）  
+├── pmtiles_exporter.py  
+│   └─ プラグイン本体  
+│      - メニュー/ツールバーへの登録  
+│      - ダイアログ起動  
+│      - PNG 出力処理  
+│      - レイヤ合成処理（QgsMapRendererCustomPainterJob）  
+├── pmtiles_exporter_dialog.py  
+│   └─ UI ロジック（PyQt）  
+│      - レイヤツリーの埋め込み  
+│      - 出力範囲選択  
+│      - ズームプリセット連動  
+│      - ファイル名候補生成  
+│      - QSettings による設定保存  
+├── pmtiles_exporter_dialog_base.ui  
+│   └─ Qt Designer で作成した UI 定義  
+│      - レイヤ選択  
+│      - 出力範囲  
+│      - ズーム設定  
+│      - 保存先選択  
+├── resources.qrc  
+│   └─ アイコン（icon.png）を含む Qt リソース定義  
+├── resources.py  
+│   └─ resources.qrc を Python に変換したもの  
+├── icon.png  
+│   └─ プラグインの 32px アイコン  
+├── pb_tool.cfg  
+│   └─ Plugin Builder 用設定ファイル  
+└── plugin_upload.py  
+    └─ QGIS 公式レポジトリへアップロードするためのスクリプト
+
 
 ---
 

@@ -1,7 +1,6 @@
 # PMTiles Exporter for QGIS
 
 QGIS のマップキャンバスに表示されているレイヤーを、そのまま PMTiles / XYZ / MBTiles として出力できる QGIS プラグインです。  
-株式会社TJL（開発：佐藤彰倫）
 
 ## 📍 概要
 日本国内の測量業務で利用される日本平面直角座標系（1〜19系 / EPSG:6671〜6689）に対応しています。
@@ -44,6 +43,8 @@ QGIS のマップキャンバスに表示されているレイヤーを、その
 
 QGIS 側で設定されている座標系をそのまま使用します。 ユーザーが座標系を選択する必要はありません。 
 
+**Note:** This plugin is intended for use in Japan only and does not support global coordinate systems.
+
 ---
 
 ## 🖥️ UI の説明
@@ -64,11 +65,10 @@ QGIS マップキャンバスに表示されているレイヤーをそのまま
 1. QGIS で出力したいレイヤーを「表示状態」にする  
 2. プラグインを開く  
 3. 出力範囲を選択  
-4. 座標系を選択  
-5. タイル形式を選択（PMTiles 推奨）  
-6. ズーム範囲を設定  
-7. 保存先フォルダを指定  
-8. **OK を押すだけで出力完了**
+4. タイル形式を選択（PMTiles 推奨）  
+5. ズーム範囲を設定  
+6. 保存先フォルダを指定  
+7. **OK を押すだけで出力完了**
 
 ---
 
@@ -93,6 +93,66 @@ QGIS マップキャンバスに表示されているレイヤーをそのまま
 - **Netlify で PMTiles を配信する場合は `_headers` が必要だが、  
   本プラグインの出力ファイルを Netlify 上で正常に配信する方法は未対応（未検証）**
 - QGIS のマップキャンバスに表示されていないレイヤーは出力されません
+
+---
+
+## 📁 プラグイン構成（ファイル一覧）
+
+PMTiles Exporter for QGIS は以下の構成で動作しています。
+
+pmtiles_exporter_for_QGIS/
+├── __init__.py
+│   └─ QGIS にプラグインを登録するためのエントリポイント。
+│      classFactory() から PMTilesExporter を読み込みます。
+│
+├── metadata.txt
+│   └─ プラグインのメタ情報（名前・作者・カテゴリ・タグなど）。
+│
+├── pmtiles_exporter.py
+│   └─ プラグイン本体。
+│      - QGIS メニュー/ツールバーへの登録
+│      - ダイアログ起動
+│      - PNG 出力処理（PMTiles 出力の前段階）
+│      - レイヤ合成処理（QgsMapRendererCustomPainterJob）
+│
+├── pmtiles_exporter_dialog.py
+│   └─ UI ロジック（PyQt）。
+│      - レイヤツリーの埋め込み
+│      - 出力範囲選択（キャンバス / レイヤ結合）
+│      - ズームプリセット連動
+│      - ファイル名候補生成
+│      - QSettings による設定保存
+│
+├── pmtiles_exporter_dialog_base.ui
+│   └─ Qt Designer で作成した UI 定義。
+│      - レイヤ選択
+│      - 出力範囲
+│      - ズーム設定
+│      - 保存先選択
+│
+├── resources.qrc
+│   └─ アイコン（icon.png）を含む Qt リソース定義。
+│
+├── resources.py
+│   └─ resources.qrc を Python に変換したもの。
+│
+├── icon.png
+│   └─ QGIS のツールバーに表示される 32px アイコン。
+│
+├── README.md
+│   └─ プラグインの説明書（本ファイル）。
+│
+├── README.html / README.txt
+│   └─ 自動生成された README の別形式（GitHub 用ではない）。
+│
+├── pb_tool.cfg
+│   └─ Plugin Builder 用の設定ファイル。
+│
+├── plugin_upload.py
+│   └─ QGIS 公式リポジトリへアップロードするためのスクリプト。
+│
+└── test/
+    └─ テスト用ディレクトリ（空）
 
 ---
 

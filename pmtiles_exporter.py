@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import os
 import math
 import time
@@ -174,30 +173,42 @@ class PMTilesExporter:
         Path(output_folder).mkdir(parents=True, exist_ok=True)
         log(f"保存先フォルダ: {output_folder}")
 
-        # 出力範囲とCRSの決定
-        extent = None
-        extent_crs = None
+        # キャンバス CRS の自動取得
+        canvas_crs = self.iface.mapCanvas().mapSettings().destinationCrs()
+        
+        # EPSG:3857 (Web Mercator) の場合の警告表示
+        if canvas_crs.authid() == "EPSG:3857":
+            QMessageBox.warning(
+                self.iface.mainWindow(),
+                "PMTiles Exporter - 警告",
+                "キャンバスのCRSが EPSG:3857 (Web Mercator) に設定されています。\n"
+                "この状態で出力すると、タイル画像に歪みやズレが生じる可能性があります。\n"
+                "日本平面直角座標系などへの変更を推奨します。"
+            )
 
+        # 常にキャンバスの CRS を基準として利用する
+        extent_crs = canvas_crs
+
+        # 出力範囲の決定
+        extent = None
         if self.dlg.radLayer.isChecked():
             log("出力範囲モード: レイヤー結合範囲")
-            extent = self.dlg.get_union_extent()
+            # キャンバスCRSに変換済みの結合範囲を取得
+            extent = self.dlg.get_union_extent(extent_crs)
             if extent is None:
                 QMessageBox.warning(self.iface.mainWindow(), "PMTiles Exporter", "表示されているレイヤーがありません。")
                 return False
-            extent_crs = self.dlg.get_extent_crs()
         else:
             log("出力範囲モード: 現在のキャンバス範囲")
             extent = self.iface.mapCanvas().extent()
-            layer_crs = self.dlg.get_extent_crs()
-            if layer_crs and layer_crs.isValid():
-                extent_crs = layer_crs
-            else:
-                extent_crs = self.iface.mapCanvas().mapSettings().destinationCrs()
 
         log(f"元extent: {extent.toString()}")
-        log(f"元CRS: {extent_crs.authid()}")
+        log(f"基準CRS: {extent_crs.authid()}")
 
         # ズーム
+        min_zoom = self.dlg.spinMinZoom.value()
+        max_zoom = self.dlg.spinMaxZoom.value()
+        self.dlg.validate_zoom_range()
         min_zoom = self.dlg.spinMinZoom.value()
         max_zoom = self.dlg.spinMaxZoom.value()
         log(f"ズームレベル: {min_zoom} から {max_zoom}")
@@ -246,7 +257,13 @@ class PMTilesExporter:
 
                 pmtiles_path = os.path.join(output_folder, "output.pmtiles")
                 log(f"PMTilesの生成を開始します: {pmtiles_path}")
-                self.export_pmtiles_from_mbtiles(mbtiles_path, pmtiles_path)
+                self.export_pmtiles_from_mbtiles(
+                    mbtiles_path,
+                    pmtiles_path,
+                    extent_4326=extent_4326,
+                    min_zoom=min_zoom,
+                    max_zoom=max_zoom
+                )
                 
                 self.generate_preview_html(output_folder, tile_format, min_zoom, max_zoom, extent_4326)
                 self.cleanup_temp_files(output_folder, tile_format)
@@ -476,33 +493,90 @@ class PMTilesExporter:
     # ---------------------------------------------------------
     # MBTiles から PMTiles への変換処理
     # ---------------------------------------------------------
-    def export_pmtiles_from_mbtiles(self, mbtiles_path, pmtiles_path):
+    def export_pmtiles_from_mbtiles(self, mbtiles_path, pmtiles_path, extent_4326=None, min_zoom=0, max_zoom=22):
         self.dlg.label_progress.setText("PMTiles作成中...")
         self.dlg.progressBar.setValue(0)
         QCoreApplication.processEvents()
-        
+
         try:
-            import pmtiles
+            import pmtiles.convert as pmtiles_convert
+            from pmtiles.writer import write
+            from pmtiles.tile import zxy_to_tileid
         except ImportError:
             raise Exception("pmtilesパッケージがインストールされていません。QGISのPython環境で 'pip install pmtiles' を実行してください。")
-            
+
+        min_zoom = int(min_zoom)
+        max_zoom = int(max_zoom)
+        if min_zoom > max_zoom:
+            raise Exception("最小ズームは最大ズーム以下である必要があります。")
+
         if os.path.exists(pmtiles_path):
             os.remove(pmtiles_path)
-            
-        log("pmtilesモジュールを使用してPMTilesへ変換しています...")
-        
+
+        conn = sqlite3.connect(mbtiles_path)
+        cursor = conn.cursor()
+
+        # MBTiles metadata をそのまま PMTiles header に流用しない。
+        # PMTiles 用に必要最小限だけ再構成する。
+        mbtiles_metadata = {
+            name: value
+            for name, value in cursor.execute("SELECT name, value FROM metadata")
+        }
+
+        metadata = {
+            "format": mbtiles_metadata.get("format", "png"),
+            "type": mbtiles_metadata.get("type", "overlay"),
+            "version": mbtiles_metadata.get("version", "1"),
+            "description": mbtiles_metadata.get("description", "Exported from QGIS"),
+            "minzoom": min_zoom,
+            "maxzoom": max_zoom,
+        }
+
+        if extent_4326 is not None:
+            bounds_str = (
+                f"{extent_4326.xMinimum()},{extent_4326.yMinimum()},"
+                f"{extent_4326.xMaximum()},{extent_4326.yMaximum()}"
+            )
+            metadata["bounds"] = bounds_str
+
+            # center は optional。ここではデフォルトで書かない。
+            # center_x = (extent_4326.xMinimum() + extent_4326.xMaximum()) / 2.0
+            # center_y = (extent_4326.yMinimum() + extent_4326.yMaximum()) / 2.0
+            # metadata["center"] = f"{center_x},{center_y},{min_zoom}"
+
+        header, pmtiles_metadata = pmtiles_convert.mbtiles_to_header_json(metadata)
+        header["min_zoom"] = min_zoom
+        header["max_zoom"] = max_zoom
+
+        tile_rows = list(cursor.execute(
+            "SELECT zoom_level, tile_column, tile_row FROM tiles "
+            "ORDER BY zoom_level, tile_column, tile_row"
+        ))
+
+        if not tile_rows:
+            conn.close()
+            raise Exception("PMTilesに書き込むタイルがありません。")
+
+        log("pmtiles.writer を使用して PMTiles のヘッダーとタイルを直接書き出しています...")
+
         try:
-            if hasattr(pmtiles, 'convert_mbtiles'):
-                pmtiles.convert_mbtiles(mbtiles_path, pmtiles_path, {})
-            else:
-                try:
-                    from pmtiles.convert import mbtiles_to_pmtiles
-                    mbtiles_to_pmtiles(mbtiles_path, pmtiles_path, {})
-                except ImportError:
-                    pmtiles.convert_mbtiles(mbtiles_path, pmtiles_path, {})
+            with write(pmtiles_path) as writer:
+                for z, x, y in tile_rows:
+                    flipped_y = (1 << z) - 1 - y
+                    tile_id = zxy_to_tileid(z, x, flipped_y)
+                    tile_data = cursor.execute(
+                        "SELECT tile_data FROM tiles "
+                        "WHERE zoom_level = ? AND tile_column = ? AND tile_row = ?",
+                        (z, x, y)
+                    ).fetchone()[0]
+                    writer.write_tile(tile_id, tile_data)
+
+                writer.finalize(header, pmtiles_metadata)
         except Exception as e:
+            conn.close()
             raise Exception(f"PMTilesへの変換処理に失敗しました: {e}")
-                
+
+        conn.close()
         self.dlg.update_progress(100.0)
         log(f"PMTilesの生成が完了しました！ 出力先: {pmtiles_path}")
 
